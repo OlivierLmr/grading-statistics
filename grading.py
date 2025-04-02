@@ -123,7 +123,14 @@ class Class:
 
         
 # RESULTS
-    
+
+# Global constants for plot colors
+HIGHLIGHT_COLOR = '#CC7722'  # Ocre color
+SEC_HIGHLIGHT_COLOR = '#E6A96D'  # Lighter version of the primary color
+PRIMARY_COLOR = 'darkgray'
+SECONDARY_COLOR = 'gray'
+TERNARY_COLOR = 'lightgray'
+
 class Results:
     def __init__(self, class_: Class, evaluation: Evaluation):
         self.class_ = class_
@@ -201,53 +208,93 @@ class Results:
                     results.set_score(student_email, question_uid, score)
         return results
     
+    def plot_style(self, ax):
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+        ax.spines['left'].set_color(TERNARY_COLOR)
+        ax.spines['bottom'].set_color(TERNARY_COLOR)
+        ax.yaxis.tick_left()
+        ax.xaxis.tick_bottom()
+        ax.tick_params(axis='x', colors=SECONDARY_COLOR)
+        ax.tick_params(axis='y', colors=SECONDARY_COLOR)
+    
     def plot_grades_histogram(self, ax, bin_width: float = 0.5):
         grades = [self.calculate_student_score(student.email) for student in self.class_.students]
         bins = [i * bin_width for i in range(int(6 / bin_width) + 1)]
-        ax.hist(grades, bins=bins, edgecolor='black')
+
+        self.plot_style(ax)
+        
+        ax.hist(grades, bins=bins, color=SEC_HIGHLIGHT_COLOR, rwidth=0.8)
         ax.set_title('Histogram of Grades')
         ax.set_xlabel('Grades')
         ax.set_ylabel('Number of Students')
         ax.set_xticks(bins)
         ax.grid(axis='y', linestyle='--', alpha=0.7)
 
+    def plot_statistics(self, ax, labels, max_points, min_values, q1_values, median_values, q3_values, max_values, average_values):
+        # Plotting
+        x_positions = np.arange(len(labels))
+
+        quartiles_handle = None
+        min_handle = None
+        max_handle = None
+        median_handle = None
+        max_points_handle = None
+
+        self.plot_style(ax)
+
+        for i, (min_val, q1, median, q3, max_val, max_point) in enumerate(zip(min_values, q1_values, median_values, q3_values, max_values, max_points)):
+            # Vertical dashed line from min to max
+            ax.plot([i, i], [min_val, max_val], color='gray', linestyle='--', linewidth=1, zorder=1)
+            # Line at min
+            min_handle, = ax.plot([i - 0.2, i + 0.2], [min_val, min_val], color=SECONDARY_COLOR, linewidth=1, zorder=3)
+            # Line at max
+            max_handle, = ax.plot([i - 0.2, i + 0.2], [max_val, max_val], color=SECONDARY_COLOR, linewidth=1, zorder=3)
+
+            # Box between Q1 and Q3
+            quartiles_handle, = ax.bar(i, q3 - q1, bottom=q1, width=0.4, color=SEC_HIGHLIGHT_COLOR, zorder=2)
+            # Line at median
+            median_handle, = ax.plot([i - 0.2, i + 0.2], [median, median], color=HIGHLIGHT_COLOR, linewidth=2, zorder=3)
+
+            # Lightgray bar in the background for max obtainable points
+            max_points_handle, = ax.bar(i, max_point, width=0.8, color=TERNARY_COLOR, alpha=0.5, zorder=0)
+
+            # Average values
+            average_handle, = ax.plot([i - 0.4, i + 0.4], [average_values[i], average_values[i]], color=HIGHLIGHT_COLOR, linestyle='--', linewidth=1, zorder=3)
+
+        ax.set_xticks(x_positions)
+        ax.set_xticklabels(labels, rotation=45, ha='right')
+        ax.set_ylabel('Scores')
+        ax.grid(axis='y', linestyle='--', alpha=0.7)
+        ax.legend([max_points_handle, max_handle, quartiles_handle, average_handle, median_handle, min_handle], 
+              ['Max Points', 'Max', 'Q1-Q3 Range', 'Average', 'Median', 'Min'], loc='upper right')
+
     def plot_question_statistics(self, ax):
         # Calculate statistics per question
         question_titles = [question.title for question in self.evaluation.questions]
         max_points = [question.points for question in self.evaluation.questions]
+        min_values = []
         q1_values = []
         median_values = []
+        average_values = []
         q3_values = []
-        min_values = []
+        max_values = []
 
         for i, question in enumerate(self.evaluation.questions):
             question_uid = self.evaluation.get_question_uid(i)
             question_scores = [self.scores[student_email][question_uid] for student_email in self.scores]
 
             if question_scores:
-                quartiles = np.percentile(question_scores, [0, 25, 50, 75])
+                quartiles = np.percentile(question_scores, [0, 25, 50, 75, 100])
                 min_values.append(quartiles[0])
                 q1_values.append(quartiles[1])
                 median_values.append(quartiles[2])
                 q3_values.append(quartiles[3])
+                max_values.append(quartiles[4])
+                average_values.append(np.mean(question_scores))
 
-        # Plotting
-        x_positions = np.arange(len(question_titles))
-        width = 0.2
-
-        ax.bar(x_positions - width, q1_values, width, label='Q1 (25th percentile)', color='lightblue')
-        ax.bar(x_positions, median_values, width, label='Median (50th percentile)', color='blue')
-        ax.bar(x_positions + width, q3_values, width, label='Q3 (75th percentile)', color='darkblue')
-        ax.scatter(x_positions, max_points, color='red', label='Max Points', zorder=3)
-        ax.scatter(x_positions, min_values, color='green', label='Min (0th percentile)', zorder=3)
-
-        ax.set_xticks(x_positions)
-        ax.set_xticklabels(question_titles, rotation=45, ha='right')
+        self.plot_statistics(ax, question_titles, max_points, min_values, q1_values, median_values, q3_values, max_values, average_values)
         ax.set_title('Statistics per Question')
-        ax.set_ylabel('Scores')
-        ax.set_xlabel('Questions')
-        ax.legend()
-        ax.grid(axis='y', linestyle='--', alpha=0.7)
 
     def plot_statistics_per_part(self, ax):
         # Group questions by part
@@ -261,10 +308,12 @@ class Results:
         # Calculate statistics per part
         part_titles = []
         max_points = []
+        max_values = []
         q1_values = []
         median_values = []
         q3_values = []
         min_values = []
+        average_values = []
 
         for part, questions in parts.items():
             part_scores = []
@@ -275,33 +324,40 @@ class Results:
                     part_scores.append(self.scores[student_email][question_uid])
 
             if part_scores:
-                quartiles = np.percentile(part_scores, [0, 25, 50, 75])
+                quartiles = np.percentile(part_scores, [0, 25, 50, 75, 100])
                 part_titles.append(part)
                 max_points.append(part_max_points)
+                max_values.append(quartiles[4])
                 min_values.append(quartiles[0])
                 q1_values.append(quartiles[1])
                 median_values.append(quartiles[2])
                 q3_values.append(quartiles[3])
+                average_values.append(np.mean(part_scores))
 
+        self.plot_statistics(ax, part_titles, max_points, min_values, q1_values, median_values, q3_values, max_values, average_values)
+        ax.set_title('Statistics per Part')
+
+    def plot_average_and_max(self, ax, labels, average_grades, max_grades):
+        self.plot_style(ax)
+        
         # Plotting
-        x_positions = np.arange(len(part_titles))
-        width = 0.2
+        x_positions = np.arange(len(labels))
+        width = 0.8
+        # Plot bars for max grades
+        ax.bar(x_positions, max_grades, width, label='Max Grade', color=TERNARY_COLOR, zorder=0)
 
-        ax.bar(x_positions - width, q1_values, width, label='Q1 (25th percentile)', color='lightblue')
-        ax.bar(x_positions, median_values, width, label='Median (50th percentile)', color='blue')
-        ax.bar(x_positions + width, q3_values, width, label='Q3 (75th percentile)', color='darkblue')
-        ax.scatter(x_positions, max_points, color='red', label='Max Points', zorder=3)
-        ax.scatter(x_positions, min_values, color='green', label='Min (0th percentile)', zorder=3)
+        # Plot bars for averages grades
+        ax.bar(x_positions, average_grades, width, label='Median Grade', color=SEC_HIGHLIGHT_COLOR, zorder=1)
 
         ax.set_xticks(x_positions)
-        ax.set_xticklabels(part_titles, rotation=45, ha='right')
-        ax.set_title('Statistics per Part')
-        ax.set_ylabel('Scores')
-        ax.set_xlabel('Parts')
+        ax.set_xticklabels(labels, rotation=45, ha='right')
+        ax.set_title('Average and Max Grades per Question')
+        ax.set_ylabel('Grades')
+        ax.set_xlabel('Questions')
         ax.legend()
         ax.grid(axis='y', linestyle='--', alpha=0.7)
 
-    def plot_average_and_max_grades(self, ax):
+    def plot_average_and_max_per_question(self, ax):
         question_uids = [self.evaluation.get_question_uid(i) for i in range(len(self.evaluation.questions))]
         max_grades = [question.points for question in self.evaluation.questions]
 
@@ -311,20 +367,7 @@ class Results:
             total_score = sum(self.scores[student_email][question_uid] for student_email in self.scores)
             average_grades.append(total_score / len(self.scores) if self.scores else 0)
 
-        # Plotting
-        x_positions = np.arange(len(question_uids))
-        width = 0.4
-
-        ax.bar(x_positions - width / 2, average_grades, width, label='Average Grade', color='skyblue')
-        ax.bar(x_positions + width / 2, max_grades, width, label='Max Grade', color='orange')
-
-        ax.set_xticks(x_positions)
-        ax.set_xticklabels([question.title for question in self.evaluation.questions], rotation=45, ha='right')
-        ax.set_title('Average and Max Grades per Question')
-        ax.set_ylabel('Grades')
-        ax.set_xlabel('Questions')
-        ax.legend()
-        ax.grid(axis='y', linestyle='--', alpha=0.7)
+        self.plot_average_and_max(ax,[question.title for question in self.evaluation.questions], average_grades, max_grades)
 
     def plot_average_and_max_grades_per_part(self, ax):
         # Group questions by part
@@ -349,48 +392,90 @@ class Results:
             max_grades.append(part_max_grade)
             average_grades.append(part_average_grade)
 
-        # Plotting
-        x_positions = np.arange(len(part_titles))
-        width = 0.4
+        self.plot_average_and_max(ax, part_titles, average_grades, max_grades)
 
-        ax.bar(x_positions - width / 2, average_grades, width, label='Average Grade', color='skyblue')
-        ax.bar(x_positions + width / 2, max_grades, width, label='Max Grade', color='orange')
-
-        ax.set_xticks(x_positions)
-        ax.set_xticklabels(part_titles, rotation=45, ha='right')
-        ax.set_title('Average and Max Grades per Part')
-        ax.set_ylabel('Grades')
-        ax.set_xlabel('Parts')
-        ax.legend()
-        ax.grid(axis='y', linestyle='--', alpha=0.7)
-
-    def plot_all_statistics(self, file_path: str):
-        fig, axes = plt.subplots(3, 2, figsize=(18, 18))
-
-        self.plot_statistics_per_part(axes[0, 0])
-        self.plot_average_and_max_grades_per_part(axes[0, 1])
-
-        self.plot_question_statistics(axes[1, 0])
-        self.plot_average_and_max_grades(axes[1, 1])
-
-        self.plot_grades_histogram(axes[2, 0])
-
+    def plot_global_statistics(self, ax):
         # Plot overall statistics in the 6th subplot
         all_grades = [self.calculate_student_score(student.email) for student in self.class_.students]
-        quartiles = np.percentile(all_grades, [25, 50, 75])
+        quartiles = np.percentile(all_grades, [0, 25, 50, 75, 100])
         average_grade = np.mean(all_grades)
 
-        axes[2, 1].boxplot(all_grades, vert=False, patch_artist=True, boxprops=dict(facecolor="lightblue"))
-        axes[2, 1].scatter(average_grade, 1, color='red', label='Average Grade', zorder=3)
-        axes[2, 1].set_title('Overall Grade Statistics')
-        axes[2, 1].set_xlabel('Grades')
-        axes[2, 1].set_yticks([])
-        axes[2, 1].legend()
-        axes[2, 1].grid(axis='x', linestyle='--', alpha=0.7)
+        self.plot_style(ax)
+
+        # Light box in the background for the full grade range
+        ax.barh(0, 6, left=0, height=0.4, color=TERNARY_COLOR, alpha=0.5, zorder=0)
+
+        # Box between Q1 and Q3
+        quartiles_handle, = ax.barh(0, quartiles[3] - quartiles[1], left=quartiles[1], height=0.2, color=SEC_HIGHLIGHT_COLOR, zorder=2)
+
+        # Line at value 4
+        ax.plot([4, 4], [-0.4, 0.4], color=SECONDARY_COLOR, linestyle='--', linewidth=1, zorder=1)
+
+        # Line at median
+        median_handle, = ax.plot([quartiles[2], quartiles[2]], [-0.1, 0.1], color=HIGHLIGHT_COLOR, linewidth=2, zorder=3)
+
+        # Line at average
+        avg_handle, = ax.plot([average_grade, average_grade], [-0.2, 0.2], color=HIGHLIGHT_COLOR, linestyle='--', linewidth=1, zorder=3)
+
+        # Line at min
+        ax.plot([quartiles[0], quartiles[0]], [-0.1, 0.1], color=SECONDARY_COLOR, linewidth=1, zorder=3)
+
+        # Line at max
+        ax.plot([quartiles[4], quartiles[4]], [-0.1, 0.1], color=SECONDARY_COLOR, linewidth=1, zorder=3)
+
+        # Dashed line from min to max
+        minmax_handle, = ax.plot([quartiles[0], quartiles[4]], [0, 0], color=SECONDARY_COLOR, linestyle='--', linewidth=1, zorder=1)
+        
+        ax.set_title('Overall Grade Statistics')
+        ax.set_xlabel('Grades')
+        ax.set_yticks([])
+        ax.legend([minmax_handle, avg_handle, median_handle, quartiles_handle],
+               ['Min to Max', 'Average', 'Median', 'Q1-Q3 Range', 'Min'], loc='upper right')
+        ax.grid(axis='x', linestyle='--', alpha=0.7)
+
+    def plot_all_statistics(self, file_path: str):
+        # fig = plt.figure(figsize=(18, 12))
+        # gs = fig.add_gridspec(3, 2, height_ratios=[1, 1, 1])
+
+        # # First row: Statistics per part
+        # ax1 = fig.add_subplot(gs[0, :])
+        # self.plot_statistics_per_part(ax1)
+
+        # # Second row: Statistics per question
+        # ax2 = fig.add_subplot(gs[1, :])
+        # self.plot_question_statistics(ax2)
+
+        # # Third row: Histogram and Global Statistics
+        # ax3 = fig.add_subplot(gs[2, 0])
+        # self.plot_grades_histogram(ax3)
+
+        # ax4 = fig.add_subplot(gs[2, 1])
+        # self.plot_global_statistics(ax4)
+
+        # plt.tight_layout()
+        # plt.savefig(file_path)
+        # plt.close(fig)
+        
+        fig, axs = plt.subplots(2, 2, figsize=(18, 12))
+
+        # First row: Statistics per part and per question
+        ax1 = axs[0, 0]
+        self.plot_statistics_per_part(ax1)
+
+        ax2 = axs[1, 0]
+        self.plot_question_statistics(ax2)
+
+        # Second row: Histogram and Global Statistics
+        ax3 = axs[0, 1]
+        self.plot_grades_histogram(ax3)
+
+        ax4 = axs[1, 1]
+        self.plot_global_statistics(ax4)
 
         plt.tight_layout()
         plt.savefig(file_path)
         plt.close(fig)
+
 def main():
     if len(sys.argv) != 5:
         print("Usage: python planning.py <roster_file> <questions_file> <plots_file> <command>")
