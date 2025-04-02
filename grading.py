@@ -4,6 +4,7 @@ import sys
 import time
 import os
 import matplotlib.pyplot as plt
+import math
 
 # QUESTIONS
 
@@ -131,6 +132,15 @@ PRIMARY_COLOR = 'darkgray'
 SECONDARY_COLOR = 'gray'
 TERNARY_COLOR = 'lightgray'
 
+def round_up(x, digits):
+    """Round a number up to the nearest multiple of 0.5."""
+    return math.ceil(x * (10 ** digits)) / (10 ** digits)
+
+assert(round_up(1.1, 1) == 1.1)
+assert(round_up(1.11, 1) == 1.2)
+assert(round_up(1.15, 1) == 1.2)
+assert(round_up(1.19, 1) == 1.2)
+
 class Results:
     def __init__(self, class_: Class, evaluation: Evaluation):
         self.class_ = class_
@@ -158,7 +168,7 @@ class Results:
                 question_uid = self.evaluation.get_question_uid(i)
                 total += self.scores[student_email][question_uid] * question.coefficient
                 max_score += question.points * question.coefficient
-            return (total / max_score) * 5 + 1 if max_score > 0 else 0.0
+            return round_up((total / max_score) * 5 + 1, 1) if max_score > 0 else 0.0
         else:
             raise ValueError("Invalid student email")
 
@@ -186,6 +196,46 @@ class Results:
                 row = {'email': student_email}
                 row.update({self.evaluation.get_question_uid(i): scores[self.evaluation.get_question_uid(i)] for i in range(len(self.evaluation.questions))})
                 writer.writerow(row)
+
+    def write_results_with_stats(self, file_path: str):
+        with open(file_path, mode='w', newline='', encoding='utf-8') as csvfile:
+            fieldnames = ['email'] + [self.evaluation.get_question_uid(i) for i in range(len(self.evaluation.questions))] + ['Total Grade']
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+
+            # Write the part numbers as the first row
+            part_row = {'email': 'Part'}
+            part_row.update({self.evaluation.get_question_uid(i): question.part for i, question in enumerate(self.evaluation.questions)})
+            writer.writerow(part_row)
+
+            # Write the question titles as the second row
+            title_row = {'email': 'Title'}
+            title_row.update({self.evaluation.get_question_uid(i): question.title for i, question in enumerate(self.evaluation.questions)})
+            writer.writerow(title_row)
+
+            # Write the scores for each student
+            for student_email, scores in self.scores.items():
+                row = {'email': student_email}
+                row.update({self.evaluation.get_question_uid(i): scores[self.evaluation.get_question_uid(i)] for i in range(len(self.evaluation.questions))})
+                row['Total Grade'] = self.calculate_student_score(student_email)
+                writer.writerow(row)
+
+            # Calculate and write the average for each question
+            average_row = {'email': 'Average'}
+            for i, question in enumerate(self.evaluation.questions):
+                question_uid = self.evaluation.get_question_uid(i)
+                question_scores = [self.scores[student_email][question_uid] for student_email in self.scores]
+                average_row[question_uid] = f"{np.mean(question_scores):.2f}" if question_scores else 0.0
+            average_row['Total Grade'] = f"{self.get_total_average():.2f}"
+            writer.writerow(average_row)
+
+            # Calculate and write the median for each question
+            median_row = {'email': 'Median'}
+            for i, question in enumerate(self.evaluation.questions):
+                question_uid = self.evaluation.get_question_uid(i)
+                question_scores = [self.scores[student_email][question_uid] for student_email in self.scores]
+                median_row[question_uid] = np.median(question_scores) if question_scores else 0.0
+            median_row['Total Grade'] = self.get_total_median()
+            writer.writerow(median_row)
 
     @classmethod
     def read_results_from_csv(cls, file_path: str, class_: Class, evaluation: Evaluation):
@@ -224,7 +274,7 @@ class Results:
 
         self.plot_style(ax)
         
-        ax.hist(grades, bins=bins, color=SEC_HIGHLIGHT_COLOR, rwidth=0.8)
+        ax.hist(grades, bins=bins, color=SEC_HIGHLIGHT_COLOR, rwidth=0.8, zorder=2)
         ax.set_title('Histogram of Grades')
         ax.set_xlabel('Grades')
         ax.set_ylabel('Number of Students')
@@ -260,7 +310,7 @@ class Results:
             max_points_handle, = ax.bar(i, max_point, width=0.8, color=TERNARY_COLOR, alpha=0.5, zorder=0)
 
             # Average values
-            average_handle, = ax.plot([i - 0.4, i + 0.4], [average_values[i], average_values[i]], color=HIGHLIGHT_COLOR, linestyle=':', linewidth=2, zorder=3)
+            average_handle = ax.bar(i, average_values[i], width=0.8, color=HIGHLIGHT_COLOR, alpha=0.2, zorder=0)
 
         ax.set_xticks(x_positions)
         ax.set_xticklabels(labels, rotation=45, ha='right')
@@ -405,7 +455,7 @@ class Results:
 
         self.plot_average_and_max(ax, part_titles, average_grades, max_grades)
 
-    def plot_global_statistics(self, ax):
+    def plot_global_statistics(self, ax, show_individual: bool = True):
         # Plot overall statistics in the 6th subplot
         all_grades = [self.calculate_student_score(student.email) for student in self.class_.students]
         quartiles = np.percentile(all_grades, [0, 25, 50, 75, 100])
@@ -426,7 +476,7 @@ class Results:
         median_handle, = ax.plot([quartiles[2], quartiles[2]], [-0.1, 0.1], color=HIGHLIGHT_COLOR, linewidth=2, zorder=3)
 
         # Line at average
-        avg_handle, = ax.plot([average_grade, average_grade], [-0.2, 0.2], color=HIGHLIGHT_COLOR, linestyle=':', linewidth=2, zorder=3)
+        avg_handle = ax.barh(0, average_grade, height=0.4, color=HIGHLIGHT_COLOR, alpha=0.2, zorder=0)
 
         # Line at min
         ax.plot([quartiles[0], quartiles[0]], [-0.1, 0.1], color=SECONDARY_COLOR, linewidth=1, zorder=3)
@@ -434,6 +484,14 @@ class Results:
         # Line at max
         ax.plot([quartiles[4], quartiles[4]], [-0.1, 0.1], color=SECONDARY_COLOR, linewidth=1, zorder=3)
 
+        # Scatter plot of all grades
+        if show_individual:
+            all_grades = [self.calculate_student_score(student.email) for student in self.class_.students]
+            np.random.seed(0)  # For reproducibility
+            y_offsets_amp = 0.03
+            y_offsets = np.random.uniform(-y_offsets_amp, y_offsets_amp, len(all_grades))
+            ax.scatter(all_grades, y_offsets, color=HIGHLIGHT_COLOR, zorder=4)
+        
         # Dashed line from min to max
         minmax_handle, = ax.plot([quartiles[0], quartiles[4]], [0, 0], color=SECONDARY_COLOR, linestyle='--', linewidth=1, zorder=1)
         
@@ -441,10 +499,38 @@ class Results:
         ax.set_xlabel('Grades')
         ax.set_yticks([])
         ax.legend([minmax_handle, avg_handle, median_handle, quartiles_handle],
-               ['Min to Max', 'Average', 'Median', 'Q1-Q3 Range', 'Min'], loc='upper right')
+               ['Min to Max', 'Average', 'Median', 'Q1-Q3 Range', 'Min'], loc='upper left')
         ax.grid(axis='x', linestyle='--', alpha=0.7)
 
-    def plot_all_statistics(self, file_path: str):
+    def get_total_average(self):
+        all_grades = [self.calculate_student_score(student.email) for student in self.class_.students]
+        return np.average(all_grades) if all_grades else 0.0
+
+    def get_total_max(self):
+        all_grades = [self.calculate_student_score(student.email) for student in self.class_.students]
+        return max(all_grades) if all_grades else 0.0
+    
+    def get_total_min(self):
+        all_grades = [self.calculate_student_score(student.email) for student in self.class_.students]
+        return min(all_grades) if all_grades else 0.0
+    
+    def get_total_median(self):
+        all_grades = [self.calculate_student_score(student.email) for student in self.class_.students]
+        return np.median(all_grades) if all_grades else 0.0
+    
+    def get_count_below_4(self):
+        count = 0
+        for student_email in self.scores:
+            if self.calculate_student_score(student_email) < 4:
+                count += 1
+        return count
+    
+    def get_percent_below_4(self):
+        count = self.get_count_below_4()
+        total_students = len(self.class_.students)
+        return (count / total_students) * 100 if total_students > 0 else 0.0
+
+    def plot_all_statistics(self, file_path: str, show_individual: bool = True):
         # fig = plt.figure(figsize=(18, 12))
         # gs = fig.add_gridspec(3, 2, height_ratios=[1, 1, 1])
 
@@ -467,21 +553,34 @@ class Results:
         # plt.savefig(file_path)
         # plt.close(fig)
         
-        fig, axs = plt.subplots(2, 2, figsize=(18, 12))
+        fig = plt.figure(figsize=(18, 12))
+        gs = fig.add_gridspec(3, 2, height_ratios=[6, 3, 1])
 
-        # First row: Statistics per part and per question
-        ax1 = axs[0, 0]
+        # First row: Statistics per part
+        ax1 = fig.add_subplot(gs[0, 0])
         self.plot_statistics_per_part(ax1)
 
-        ax2 = axs[1, 0]
+        # Second row: Statistics per question (spans two rows)
+        ax2 = fig.add_subplot(gs[0, 1])
         self.plot_question_statistics(ax2)
 
-        # Second row: Histogram and Global Statistics
-        ax3 = axs[0, 1]
+        # Second row, second column: Histogram
+        ax3 = fig.add_subplot(gs[1:, 0])
         self.plot_grades_histogram(ax3)
 
-        ax4 = axs[1, 1]
-        self.plot_global_statistics(ax4)
+        # Third row, second column: Global Statistics with space for text
+        ax4 = fig.add_subplot(gs[1, 1])
+        self.plot_global_statistics(ax4, show_individual)
+
+        # Add some text to the lower-right ax
+        ax5 = fig.add_subplot(gs[2, 1])
+        ax5.axis('off')  # Turn off the axis
+        text = f"Average: {self.get_total_average():.2f}\n" + \
+                f"Median: {self.get_total_median():.2f}\n" + \
+                f"Max: {self.get_total_max():.2f}\n" + \
+                f"Min: {self.get_total_min():.2f}\n" + \
+                f"{self.get_count_below_4()}/{len(self.class_.students)} students ({self.get_percent_below_4():.2f}%) below 4.\n"
+        ax5.text(0, 0.5, text, transform=ax5.transAxes, ha='left', va='center', fontsize=16, color=PRIMARY_COLOR, linespacing=1.5)
 
         plt.tight_layout()
         plt.savefig(file_path)
@@ -565,6 +664,9 @@ def main():
                     # Reload results and update plots
                     results = Results.read_results_from_csv(results_file, class_, evaluation)
                     results.plot_all_statistics(plots_file)
+                    anonym_plots_file = os.path.splitext(plots_file)[0] + '_anonym' + os.path.splitext(plots_file)[1]
+                    results.plot_all_statistics(anonym_plots_file, show_individual=False)
+                    results.write_results_with_stats(os.path.splitext(results_file)[0] + '_with_stats' + os.path.splitext(results_file)[1])
                     print(f"Plots updated and saved to {plots_file}")
 
                     # Update the last modified time
