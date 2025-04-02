@@ -260,7 +260,7 @@ class Results:
             max_points_handle, = ax.bar(i, max_point, width=0.8, color=TERNARY_COLOR, alpha=0.5, zorder=0)
 
             # Average values
-            average_handle, = ax.plot([i - 0.4, i + 0.4], [average_values[i], average_values[i]], color=HIGHLIGHT_COLOR, linestyle='--', linewidth=1, zorder=3)
+            average_handle, = ax.plot([i - 0.4, i + 0.4], [average_values[i], average_values[i]], color=HIGHLIGHT_COLOR, linestyle=':', linewidth=2, zorder=3)
 
         ax.set_xticks(x_positions)
         ax.set_xticklabels(labels, rotation=45, ha='right')
@@ -271,8 +271,9 @@ class Results:
 
     def plot_question_statistics(self, ax):
         # Calculate statistics per question
-        question_titles = [question.title for question in self.evaluation.questions]
-        max_points = [question.points for question in self.evaluation.questions]
+        # question_titles = [f"{question.part} : {question.title}" for question in self.evaluation.questions]
+        question_titles = []
+        max_points = [question.points * question.coefficient for question in self.evaluation.questions]
         min_values = []
         q1_values = []
         median_values = []
@@ -280,9 +281,19 @@ class Results:
         q3_values = []
         max_values = []
 
+        last_part = None
+        part_id = 0
+
         for i, question in enumerate(self.evaluation.questions):
             question_uid = self.evaluation.get_question_uid(i)
-            question_scores = [self.scores[student_email][question_uid] for student_email in self.scores]
+            question_scores = [self.scores[student_email][question_uid] * question.coefficient for student_email in self.scores]
+
+            if question.part != last_part:
+                last_part = question.part
+                part_id += 1
+                question_titles.append(f"P{question.part} : {question.title}")
+            else:
+                question_titles.append(f"{question.title}")
 
             if question_scores:
                 quartiles = np.percentile(question_scores, [0, 25, 50, 75, 100])
@@ -316,12 +327,12 @@ class Results:
         average_values = []
 
         for part, questions in parts.items():
-            part_scores = []
-            part_max_points = sum(question.points for question, _ in questions)
+            part_scores = [0 for _ in range(len(self.scores))]
+            part_max_points = sum(question.points * question.coefficient for question, _ in questions)
 
             for question, question_uid in questions:
-                for student_email in self.scores:
-                    part_scores.append(self.scores[student_email][question_uid])
+                for i, student_email in enumerate(self.scores):
+                    part_scores[i] += self.scores[student_email][question_uid] * question.coefficient
 
             if part_scores:
                 quartiles = np.percentile(part_scores, [0, 25, 50, 75, 100])
@@ -415,7 +426,7 @@ class Results:
         median_handle, = ax.plot([quartiles[2], quartiles[2]], [-0.1, 0.1], color=HIGHLIGHT_COLOR, linewidth=2, zorder=3)
 
         # Line at average
-        avg_handle, = ax.plot([average_grade, average_grade], [-0.2, 0.2], color=HIGHLIGHT_COLOR, linestyle='--', linewidth=1, zorder=3)
+        avg_handle, = ax.plot([average_grade, average_grade], [-0.2, 0.2], color=HIGHLIGHT_COLOR, linestyle=':', linewidth=2, zorder=3)
 
         # Line at min
         ax.plot([quartiles[0], quartiles[0]], [-0.1, 0.1], color=SECONDARY_COLOR, linewidth=1, zorder=3)
