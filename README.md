@@ -19,14 +19,14 @@ pip3 install -r requirements.txt
 First run the init command to generate all necessary files :
 
 ```bash
-python3 grading.py roster.csv questions.csv plots.pdf init
+python3 grading.py folder_name init
 ```
 
-This will create the three following files:
+This will create a folder named `folder_name` in the current directory. Inside this folder, it will create the following files:
 - `roster.csv`: A CSV file containing the list of students, initially a single dummy student.
 - `questions.csv`: A CSV file containing the list of questions, initially a single dummy question.
 - `results.csv`: A CSV file containing the results of the grading, initially with 0.0 for the only cell.
-- `plots.pdf`: A PDF file containing the plots for the questions, initially empty.
+- `settings.json`: A JSON file containing the settings for the grading process, e.g. bonus points.
 
 ### Add students and questions
 
@@ -34,8 +34,8 @@ At any time, if the number of students or questions change, you may re-run the `
 
 ### Add results
 
-Once the roster and question set is correct, you may run the `watch` command to automatically re-generate the plots every time any of the csv files change.
+Once the roster and question set is correct, you may run the `watch` command. This will automatically re-generate a `plots.pdf` file in the provided folder every time any of the csv files changes.
 
 ```bash
-python3 grading.py roster.csv questions.csv plots.pdf watch
+python3 grading.py folder_name watch
 ```

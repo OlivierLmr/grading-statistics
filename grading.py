@@ -617,15 +617,18 @@ class Results:
         plt.close(fig)
 
 def main():
-    if len(sys.argv) != 5:
-        print("Usage: python planning.py <roster_file> <questions_file> <plots_file> <command>")
+    if len(sys.argv) != 3:
+        print("Usage: python planning.py <folder_path> <command>")
         sys.exit(1)
 
-    roster_file = sys.argv[1]
-    questions_file = sys.argv[2]
-    plots_file = sys.argv[3]
-    settings_file = "settings.json"
-    command = sys.argv[4]
+    folder_path = sys.argv[1]
+    command = sys.argv[2]
+
+    roster_file = os.path.join(folder_path, "roster.csv")
+    questions_file = os.path.join(folder_path, "questions.csv")
+    plots_file = os.path.join(folder_path, "plots.pdf")
+    settings_file = os.path.join(folder_path, "settings.json")
+    results_file = os.path.join(folder_path, "results.csv")
 
     if command not in ['init', 'watch']:
         print("Command must be either 'init' or 'watch'")
@@ -636,6 +639,11 @@ def main():
 
     if command == 'init':
         settings = GlobalSettings()
+
+        # Create the folder if it does not exist
+        if not os.path.exists(folder_path):
+            os.makedirs(folder_path)
+            print(f"Created folder: {folder_path}")
 
         # Create dummy evaluation and class CSVs if they don't exist
         if not os.path.exists(roster_file):
@@ -651,13 +659,11 @@ def main():
         results = Results(class_, evaluation, settings)
 
         # Save initial results to a CSV file
-        results_file = "results.csv"
         results.write_results_to_csv(results_file)
         print(f"Initialized results and saved to {results_file}")
 
     elif command == 'watch':
         # Watch for changes in the results file
-        results_file = "results.csv"
         if not os.path.exists(results_file):
             print(f"Results file '{results_file}' does not exist. Run 'init' first.")
             sys.exit(1)
