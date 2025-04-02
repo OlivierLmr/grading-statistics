@@ -5,6 +5,8 @@ import time
 import os
 import matplotlib.pyplot as plt
 import math
+import json
+import json
 
 # QUESTIONS
 
@@ -122,6 +124,30 @@ class Class:
                 })
         print(f"Sample class written to {file_path}")
 
+# SETTINGS
+
+class GlobalSettings:
+    def __init__(self, bonus_points: float = 0.0):
+        self.bonus_points = bonus_points
+
+    def __repr__(self):
+        return f"GlobalSettings(bonus_points={self.bonus_points})"
+
+    @classmethod
+    def from_json(cls, file_path: str):
+        if os.path.exists(file_path):
+            with open(file_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                return cls(bonus_points=data.get('bonus_points', 0.0))
+        else:
+            return cls()
+
+    def to_json(self, file_path: str):
+        with open(file_path, 'w', encoding='utf-8') as f:
+            json.dump({'bonus_points': self.bonus_points}, f, indent=4)
+
+# Define a default instance of GlobalSettings as a class-level attribute
+GlobalSettings.default = GlobalSettings(bonus_points=0.0)
         
 # RESULTS
 
@@ -142,7 +168,8 @@ assert(round_up(1.15, 1) == 1.2)
 assert(round_up(1.19, 1) == 1.2)
 
 class Results:
-    def __init__(self, class_: Class, evaluation: Evaluation):
+    def __init__(self, class_: Class, evaluation: Evaluation, settings: GlobalSettings = GlobalSettings.default):
+        self.settings = settings
         self.class_ = class_
         self.evaluation = evaluation
         self.scores = {student.email: {evaluation.get_question_uid(i): 0.0 for i in range(len(evaluation.questions))} for student in class_.students}
@@ -160,7 +187,7 @@ class Results:
         else:
             raise ValueError(f"Invalid student email or question UID: {student_email}, {question_uid}\nAvailable question UIDs are: {list(self.scores[student_email].keys())}")
 
-    def calculate_student_score(self, student_email: str):
+    def calculate_student_score(self, student_email: str, clamp: bool = True):
         if student_email in self.scores:
             total = 0.0
             max_score = 0.0
@@ -168,7 +195,10 @@ class Results:
                 question_uid = self.evaluation.get_question_uid(i)
                 total += self.scores[student_email][question_uid] * question.coefficient
                 max_score += question.points * question.coefficient
-            return round_up((total / max_score) * 5 + 1, 1) if max_score > 0 else 0.0
+            grade = round_up((total / (max_score - self.settings.bonus_points)) * 5 + 1, 1) if max_score > 0 else 0.0
+            if clamp:
+                grade = min(grade, 6.0)
+            return grade
         else:
             raise ValueError("Invalid student email")
 
@@ -216,7 +246,7 @@ class Results:
             for student_email, scores in self.scores.items():
                 row = {'email': student_email}
                 row.update({self.evaluation.get_question_uid(i): scores[self.evaluation.get_question_uid(i)] for i in range(len(self.evaluation.questions))})
-                row['Total Grade'] = self.calculate_student_score(student_email)
+                row['Total Grade'] = self.calculate_student_score(student_email, clamp=False)
                 writer.writerow(row)
 
             # Calculate and write the average for each question
@@ -594,6 +624,7 @@ def main():
     roster_file = sys.argv[1]
     questions_file = sys.argv[2]
     plots_file = sys.argv[3]
+    settings_file = "settings.json"
     command = sys.argv[4]
 
     if command not in ['init', 'watch']:
@@ -604,16 +635,20 @@ def main():
     evaluation_name = "Evaluation"
 
     if command == 'init':
+        settings = GlobalSettings()
+
         # Create dummy evaluation and class CSVs if they don't exist
         if not os.path.exists(roster_file):
             Class.create_sample_class(roster_file)
         if not os.path.exists(questions_file):
             Evaluation.create_sample_evaluation(questions_file)
+        if not os.path.exists(settings_file):
+            settings.to_json(settings_file)
 
         # Initialize class and evaluation
         class_ = Class.from_csv(class_name, roster_file)
         evaluation = Evaluation.from_csv(evaluation_name, questions_file)
-        results = Results(class_, evaluation)
+        results = Results(class_, evaluation, settings)
 
         # Save initial results to a CSV file
         results_file = "results.csv"
@@ -629,6 +664,7 @@ def main():
 
         class_ = Class.from_csv(class_name, roster_file)
         evaluation = Evaluation.from_csv(evaluation_name, questions_file)
+        settings = GlobalSettings.from_json(settings_file)
 
         print(f"Watching for changes in {results_file}, {roster_file}, and {questions_file}...")
         last_modified_times = {
@@ -663,6 +699,7 @@ def main():
 
                     # Reload results and update plots
                     results = Results.read_results_from_csv(results_file, class_, evaluation)
+                    results.settings = settings
                     results.plot_all_statistics(plots_file)
                     anonym_plots_file = os.path.splitext(plots_file)[0] + '_anonym' + os.path.splitext(plots_file)[1]
                     results.plot_all_statistics(anonym_plots_file, show_individual=False)
