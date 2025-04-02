@@ -23,6 +23,7 @@ python3 grading.py folder_name init
 ```
 
 This will create a folder named `folder_name` in the current directory. Inside this folder, it will create the following files:
+
 - `roster.csv`: A CSV file containing the list of students, initially a single dummy student.
 - `questions.csv`: A CSV file containing the list of questions, initially a single dummy question.
 - `results.csv`: A CSV file containing the results of the grading, initially with 0.0 for the only cell.
