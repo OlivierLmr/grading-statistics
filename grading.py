@@ -154,7 +154,7 @@ GlobalSettings.default = GlobalSettings(bonus_points=0.0)
 # Global constants for plot colors
 HIGHLIGHT_COLOR = '#CC7722'  # Ocre color
 SEC_HIGHLIGHT_COLOR = '#E6A96D'  # Lighter version of the primary color
-PRIMARY_COLOR = 'darkgray'
+PRIMARY_COLOR = 'gray'
 SECONDARY_COLOR = 'gray'
 TERNARY_COLOR = 'lightgray'
 
@@ -485,7 +485,7 @@ class Results:
 
         self.plot_average_and_max(ax, part_titles, average_grades, max_grades)
 
-    def plot_global_statistics(self, ax, show_individual: bool = True):
+    def plot_global_statistics_h(self, ax, show_individual: bool = True):
         # Plot overall statistics in the 6th subplot
         all_grades = [self.calculate_student_score(student.email) for student in self.class_.students]
         quartiles = np.percentile(all_grades, [0, 25, 50, 75, 100])
@@ -532,6 +532,83 @@ class Results:
                ['Min to Max', 'Average', 'Median', 'Q1-Q3 Range', 'Min'], loc='upper left')
         ax.grid(axis='x', linestyle='--', alpha=0.7)
 
+    def plot_global_statistics_v(self, ax, show_individual: bool = True):
+        # Plot overall statistics vertically
+        all_grades = [self.calculate_student_score(student.email) for student in self.class_.students]
+        quartiles = np.percentile(all_grades, [0, 25, 50, 75, 100])
+        average_grade = np.mean(all_grades)
+
+        self.plot_style(ax)
+
+        # Light box in the background for the full grade range
+        ax.bar(0, 6, bottom=0, width=0.4, color=TERNARY_COLOR, alpha=0.5, zorder=0)
+
+        # Box between Q1 and Q3
+        quartiles_handle, = ax.bar(0, quartiles[3] - quartiles[1], bottom=quartiles[1], width=0.2, color=SEC_HIGHLIGHT_COLOR, zorder=2)
+
+        # Line at value 4
+        ax.plot([-0.5, 0.5], [4, 4], color=SECONDARY_COLOR, linestyle='--', linewidth=1, zorder=1)
+
+        # Line at median
+        median_handle, = ax.plot([-0.1, 0.1], [quartiles[2], quartiles[2]], color=HIGHLIGHT_COLOR, linewidth=2, zorder=3)
+
+        # Line at average
+        avg_handle = ax.bar(0, average_grade, width=0.4, color=HIGHLIGHT_COLOR, alpha=0.2, zorder=0)
+
+        # Line at min
+        ax.plot([-0.1, 0.1], [quartiles[0], quartiles[0]], color=SECONDARY_COLOR, linewidth=1, zorder=3)
+
+        # Line at max
+        ax.plot([-0.1, 0.1], [quartiles[4], quartiles[4]], color=SECONDARY_COLOR, linewidth=1, zorder=3)
+
+        # Dashed line from min to max
+        minmax_handle, = ax.plot([0, 0], [quartiles[0], quartiles[4]], color=SECONDARY_COLOR, linestyle='--', linewidth=1, zorder=1)
+
+        if show_individual:
+
+            # Scatter plot of all grades
+            all_grades = [self.calculate_student_score(student.email) for student in self.class_.students]
+            np.random.seed(0)  # For reproducibility
+            x_offsets_amp = 0.03
+            x_offsets = np.random.uniform(-x_offsets_amp, x_offsets_amp, len(all_grades))
+            ax.scatter(x_offsets, all_grades, color=HIGHLIGHT_COLOR, zorder=6)
+
+            # Add student names to the right of the plot with lines connecting to points
+            offset = 1000
+            min_gap = 0.15
+            x_pos = 0.51
+            # Sort students by descending grade and align x_offsets accordingly
+            student_offsets = list(zip(self.class_.students, x_offsets))
+            sorted_student_offsets = sorted(student_offsets, key=lambda pair: self.calculate_student_score(pair[0].email), reverse=True)
+            
+            for i, (student, x_offset) in enumerate(sorted_student_offsets):
+                grade = self.calculate_student_score(student.email)
+                offset = min(offset - min_gap, grade)
+                ax.text(x_pos, offset, f"{grade} {student.first_name} {student.last_name}", fontsize=8, color=PRIMARY_COLOR, va='center')
+                ax.plot([x_offset, x_pos], [grade, offset], color="black", alpha=0.2, linestyle='-', linewidth=0.5, zorder=5)
+
+            ax.set_xlim(left=-0.5, right=0.5)  # Adjust the grid to stop at around 1 on the right
+
+        ax.set_title('Overall Grade Statistics')
+        ax.set_ylabel('Grades')
+        ax.set_xticks([])
+        ax.legend([minmax_handle, avg_handle, median_handle, quartiles_handle],
+                ['Min to Max', 'Average', 'Median', 'Q1-Q3 Range'], loc='lower left')
+        ax.grid(axis='y', linestyle='--', alpha=0.7, clip_on=False)
+
+    def plot_global_statistics_split(self, ax):
+        ax.axis('off')  # Turn off the axis
+        
+        # Split the ax into two subplots locally
+        left_ax = ax.inset_axes([0, 0, 0.5, 1])  # Left half
+        right_ax = ax.inset_axes([0.5, 0, 0.5, 1])  # Right half
+
+        # Plot global statistics vertically on the left subplot
+        self.plot_global_statistics_v(left_ax)
+
+        # Leave the right subplot empty or add additional content if needed
+        right_ax.axis('off')  # Turn off the right subplot for now
+
     def get_total_average(self):
         all_grades = [self.calculate_student_score(student.email) for student in self.class_.students]
         return np.average(all_grades) if all_grades else 0.0
@@ -560,58 +637,41 @@ class Results:
         total_students = len(self.class_.students)
         return (count / total_students) * 100 if total_students > 0 else 0.0
 
+    def write_global_values(self, ax, show_individual: bool = True):
+        ax.axis('off')  # Turn off the axis
+        text = f"Average: {self.get_total_average():.2f}\n" + \
+                f"Median: {self.get_total_median():.2f}\n" + \
+                f"Max: {self.get_total_max():.2f}\n" + \
+                f"Min: {self.get_total_min():.2f}\n" + \
+                f"{self.get_count_below_4()}/{len(self.class_.students)} students ({self.get_percent_below_4():.2f}%) below 4.\n"
+        ax.text(0, 0.5, text, transform=ax.transAxes, ha='left', va='center', fontsize=14, color=PRIMARY_COLOR, linespacing=1.5)
+
+    
+
     def plot_all_statistics(self, file_path: str, show_individual: bool = True):
-        # fig = plt.figure(figsize=(18, 12))
-        # gs = fig.add_gridspec(3, 2, height_ratios=[1, 1, 1])
-
-        # # First row: Statistics per part
-        # ax1 = fig.add_subplot(gs[0, :])
-        # self.plot_statistics_per_part(ax1)
-
-        # # Second row: Statistics per question
-        # ax2 = fig.add_subplot(gs[1, :])
-        # self.plot_question_statistics(ax2)
-
-        # # Third row: Histogram and Global Statistics
-        # ax3 = fig.add_subplot(gs[2, 0])
-        # self.plot_grades_histogram(ax3)
-
-        # ax4 = fig.add_subplot(gs[2, 1])
-        # self.plot_global_statistics(ax4)
-
-        # plt.tight_layout()
-        # plt.savefig(file_path)
-        # plt.close(fig)
-        
         fig = plt.figure(figsize=(18, 12))
-        gs = fig.add_gridspec(3, 2, height_ratios=[6, 3, 1])
+        gs = fig.add_gridspec(3, 3, height_ratios=[4, 3, 1], width_ratios=[1, 1, 0.4])
 
         # First row: Statistics per part
         ax1 = fig.add_subplot(gs[0, 0])
         self.plot_statistics_per_part(ax1)
 
         # Second row: Statistics per question (spans two rows)
-        ax2 = fig.add_subplot(gs[0, 1])
+        ax2 = fig.add_subplot(gs[1:, 0:2])
         self.plot_question_statistics(ax2)
 
         # Second row, second column: Histogram
-        ax3 = fig.add_subplot(gs[1:, 0])
+        ax3 = fig.add_subplot(gs[0, 1])
         self.plot_grades_histogram(ax3)
 
-        # Third row, second column: Global Statistics with space for text
-        ax4 = fig.add_subplot(gs[1, 1])
-        self.plot_global_statistics(ax4, show_individual)
+        # Third row, second column: Global Statistics
+        ax4 = fig.add_subplot(gs[:2,2])
+        self.plot_global_statistics_v(ax4, show_individual)
 
         # Add some text to the lower-right ax
-        ax5 = fig.add_subplot(gs[2, 1])
-        ax5.axis('off')  # Turn off the axis
-        text = f"Average: {self.get_total_average():.2f}\n" + \
-                f"Median: {self.get_total_median():.2f}\n" + \
-                f"Max: {self.get_total_max():.2f}\n" + \
-                f"Min: {self.get_total_min():.2f}\n" + \
-                f"{self.get_count_below_4()}/{len(self.class_.students)} students ({self.get_percent_below_4():.2f}%) below 4.\n"
-        ax5.text(0, 0.5, text, transform=ax5.transAxes, ha='left', va='center', fontsize=16, color=PRIMARY_COLOR, linespacing=1.5)
-
+        ax5 = fig.add_subplot(gs[2, 2])
+        self.write_global_values(ax5, show_individual)
+        
         plt.tight_layout()
         plt.savefig(file_path)
         plt.close(fig)
