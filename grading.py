@@ -6,7 +6,7 @@ import os
 import matplotlib.pyplot as plt
 import math
 import json
-import json
+from typing import Optional, List
 
 # QUESTIONS
 
@@ -135,26 +135,38 @@ class Class:
 
 
 class GlobalSettings:
-    def __init__(self, bonus_points: float = 0.0, added_points: float = 0.0):
+    def __init__(self, bonus_points: float = 0.0, added_points: float = 0.0, dropped_questions: Optional[List[int]] = None, given_questions: Optional[List[int]] = None):
         self.bonus_points = bonus_points
         self.added_points = added_points
+        # Lists of question numbers (1-based) that are dropped or given
+        self.dropped_questions = dropped_questions or []
+        self.given_questions = given_questions or []
 
     def __repr__(self):
-        return f"GlobalSettings(bonus={self.bonus_points}, added={self.added_points})"
+        return f"GlobalSettings(bonus={self.bonus_points}, added={self.added_points}, dropped={self.dropped_questions}, given={self.given_questions})"
 
     @classmethod
     def from_json(cls, file_path: str):
         if os.path.exists(file_path):
             with open(file_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-                return cls(bonus_points=data.get('bonus_points', 0.0),
-                           added_points=data.get('added_points', 0.0))
+                return cls(
+                    bonus_points=data.get('bonus_points', 0.0),
+                    added_points=data.get('added_points', 0.0),
+                    dropped_questions=data.get('dropped_questions', []),
+                    given_questions=data.get('given_questions', [])
+                )
         else:
             return cls()
 
     def to_json(self, file_path: str):
         with open(file_path, 'w', encoding='utf-8') as f:
-            json.dump({'bonus_points': self.bonus_points}, f, indent=4)
+            json.dump({
+                'bonus_points': self.bonus_points,
+                'added_points': self.added_points,
+                'dropped_questions': self.dropped_questions,
+                'given_questions': self.given_questions
+            }, f, indent=4)
 
 
 # Define a default instance of GlobalSettings as a class-level attribute
@@ -186,13 +198,43 @@ class Results:
         self.settings = settings
         self.class_ = class_
         self.evaluation = evaluation
-        self.scores = {student.email: {evaluation.get_question_uid(i): 0.0 for i in range(
-            len(evaluation.questions))} for student in class_.students}
+
+        # Determine active questions by excluding dropped ones (dropped_questions are 1-based indices)
+        active_indices = [i for i in range(len(evaluation.questions)) if (i + 1) not in getattr(self.settings, 'dropped_questions', [])]
+        active_uids = [evaluation.get_question_uid(i) for i in active_indices]
+
+        # Initialize scores only for active question UIDs
+        self.scores = {student.email: {uid: 0.0 for uid in active_uids} for student in class_.students}
+
+        # Apply 'given' questions: give full points to every student for those question numbers
+        for qnum in getattr(self.settings, 'given_questions', []):
+            idx = qnum - 1
+            if 0 <= idx < len(evaluation.questions):
+                uid = evaluation.get_question_uid(idx)
+                # Only set if uid is active (i.e., not dropped)
+                if uid in next(iter(self.scores.values()), {}):
+                    full_score = evaluation.questions[idx].points
+                    for student_email in self.scores:
+                        self.scores[student_email][uid] = full_score
+
+    # Helper methods to get active questions
+    def active_question_indices(self):
+        return [i for i in range(len(self.evaluation.questions)) if (i + 1) not in getattr(self.settings, 'dropped_questions', [])]
+
+    def active_question_uids(self):
+        return [self.evaluation.get_question_uid(i) for i in self.active_question_indices()]
+
+    def get_question_by_index(self, i: int):
+        return self.evaluation.questions[i]
 
     def get_score(self, student_email: str, question_number: int):
         if student_email in self.scores and 0 <= question_number < len(self.evaluation.questions):
             question_uid = self.evaluation.get_question_uid(question_number)
-            return self.scores[student_email][question_uid]
+            if question_uid in self.scores[student_email]:
+                return self.scores[student_email][question_uid]
+            else:
+                # Dropped question: behave as if it doesn't exist
+                raise ValueError("Question has been dropped or does not exist for this results object")
         else:
             raise ValueError("Invalid student email or question number")
 
@@ -207,14 +249,16 @@ class Results:
         if student_email in self.scores:
             total = 0.0
             max_score = 0.0
-            for i, question in enumerate(self.evaluation.questions):
+            # Use only active questions for calculation
+            for i in self.active_question_indices():
+                question = self.evaluation.questions[i]
                 question_uid = self.evaluation.get_question_uid(i)
-                total += self.scores[student_email][question_uid] * \
-                    question.coefficient
+                # score stored is raw points
+                score = self.scores[student_email].get(question_uid, 0.0)
+                total += score * question.coefficient
                 max_score += question.points * question.coefficient
             total += self.settings.added_points
-            grade = round_up((total / (max_score - self.settings.bonus_points))
-                             * 5 + 1, 1) if max_score > 0 else 0.0
+            grade = round_up((total / (max_score - self.settings.bonus_points)) * 5 + 1, 1) if max_score > 0 else 0.0
             if clamp:
                 grade = min(grade, 6.0)
             return grade
@@ -226,81 +270,73 @@ class Results:
 
     def write_results_to_csv(self, file_path: str):
         with open(file_path, mode='w', newline='', encoding='utf-8') as csvfile:
-            fieldnames = ['email'] + [self.evaluation.get_question_uid(
-                i) for i in range(len(self.evaluation.questions))]
+            # Use only active question uids
+            active_indices = self.active_question_indices()
+            fieldnames = ['email'] + [self.evaluation.get_question_uid(i) for i in active_indices]
             writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
 
             # Write the part numbers as the first row
             part_row = {'email': 'Part'}
-            part_row.update({self.evaluation.get_question_uid(
-                i): question.part for i, question in enumerate(self.evaluation.questions)})
+            part_row.update({self.evaluation.get_question_uid(i): self.evaluation.questions[i].part for i in active_indices})
             writer.writerow(part_row)
 
             # Write the question titles as the second row
             title_row = {'email': 'Title'}
-            title_row.update({self.evaluation.get_question_uid(
-                i): question.title for i, question in enumerate(self.evaluation.questions)})
+            title_row.update({self.evaluation.get_question_uid(i): self.evaluation.questions[i].title for i in active_indices})
             writer.writerow(title_row)
 
             # Write the scores for each student
             writer.writeheader()
             for student_email, scores in self.scores.items():
                 row = {'email': student_email}
-                row.update({self.evaluation.get_question_uid(i): scores[self.evaluation.get_question_uid(
-                    i)] for i in range(len(self.evaluation.questions))})
+                row.update({self.evaluation.get_question_uid(i): scores.get(self.evaluation.get_question_uid(i), 0.0) for i in active_indices})
                 writer.writerow(row)
 
     def write_results_with_stats(self, file_path: str):
         with open(file_path, mode='w', newline='', encoding='utf-8') as csvfile:
-            fieldnames = ['email'] + [self.evaluation.get_question_uid(
-                i) for i in range(len(self.evaluation.questions))] + ['Total Grade']
+            active_indices = self.active_question_indices()
+            fieldnames = ['email'] + [self.evaluation.get_question_uid(i) for i in active_indices] + ['Total Grade']
             writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
 
             # Write the part numbers as the first row
             part_row = {'email': 'Part'}
-            part_row.update({self.evaluation.get_question_uid(
-                i): question.part for i, question in enumerate(self.evaluation.questions)})
+            part_row.update({self.evaluation.get_question_uid(i): self.evaluation.questions[i].part for i in active_indices})
             writer.writerow(part_row)
 
             # Write the question titles as the second row
             title_row = {'email': 'Title'}
-            title_row.update({self.evaluation.get_question_uid(
-                i): question.title for i, question in enumerate(self.evaluation.questions)})
+            title_row.update({self.evaluation.get_question_uid(i): self.evaluation.questions[i].title for i in active_indices})
             writer.writerow(title_row)
 
             # Write the scores for each student
             for student_email, scores in self.scores.items():
                 row = {'email': student_email}
-                row.update({self.evaluation.get_question_uid(i): scores[self.evaluation.get_question_uid(
-                    i)] for i in range(len(self.evaluation.questions))})
-                row['Total Grade'] = self.calculate_student_score(
-                    student_email, clamp=False)
+                row.update({self.evaluation.get_question_uid(i): scores.get(self.evaluation.get_question_uid(i), 0.0) for i in active_indices})
+                row['Total Grade'] = self.calculate_student_score(student_email, clamp=False)
                 writer.writerow(row)
 
             # Calculate and write the average for each question
             average_row = {'email': 'Average'}
-            for i, question in enumerate(self.evaluation.questions):
+            for i in active_indices:
                 question_uid = self.evaluation.get_question_uid(i)
-                question_scores = [self.scores[student_email]
-                                   [question_uid] for student_email in self.scores]
+                question_scores = [self.scores[student_email].get(question_uid, 0.0) for student_email in self.scores]
                 average_row[question_uid] = f"{np.mean(question_scores):.2f}" if question_scores else 0.0
             average_row['Total Grade'] = f"{self.get_total_average():.2f}"
             writer.writerow(average_row)
 
             # Calculate and write the median for each question
             median_row = {'email': 'Median'}
-            for i, question in enumerate(self.evaluation.questions):
+            for i in active_indices:
                 question_uid = self.evaluation.get_question_uid(i)
-                question_scores = [self.scores[student_email]
-                                   [question_uid] for student_email in self.scores]
-                median_row[question_uid] = np.median(
-                    question_scores) if question_scores else 0.0
+                question_scores = [self.scores[student_email].get(question_uid, 0.0) for student_email in self.scores]
+                median_row[question_uid] = np.median(question_scores) if question_scores else 0.0
             median_row['Total Grade'] = self.get_total_median()
             writer.writerow(median_row)
 
     @classmethod
-    def read_results_from_csv(cls, file_path: str, class_: Class, evaluation: Evaluation):
-        results = cls(class_, evaluation)
+    def read_results_from_csv(cls, file_path: str, class_: Class, evaluation: Evaluation, settings: GlobalSettings = GlobalSettings.default):
+        # Initialize results with settings so dropped/given are taken into account
+        results = cls(class_, evaluation, settings)
         with open(file_path, mode='r', newline='', encoding='utf-8') as csvfile:
             reader = csv.reader(csvfile)
 
@@ -315,8 +351,21 @@ class Results:
             for row in reader:
                 student_email = row[0]
                 for i, question_uid in enumerate(question_uids):
-                    score = float(row[i + 1])
-                    results.set_score(student_email, question_uid, score)
+                    # Only set scores for active questions (others are treated as dropped)
+                    if student_email in results.scores and question_uid in results.scores[student_email]:
+                        score = float(row[i + 1])
+                        results.set_score(student_email, question_uid, score)
+
+        # After reading, ensure that 'given' questions are set to full points for everyone
+        for qnum in getattr(results.settings, 'given_questions', []):
+            idx = qnum - 1
+            if 0 <= idx < len(evaluation.questions):
+                uid = evaluation.get_question_uid(idx)
+                if uid in next(iter(results.scores.values()), {}):
+                    full_score = evaluation.questions[idx].points
+                    for student_email in results.scores:
+                        results.scores[student_email][uid] = full_score
+
         return results
 
     def plot_style(self, ax):
@@ -391,10 +440,10 @@ class Results:
 
     def plot_question_statistics(self, ax):
         # Calculate statistics per question
-        # question_titles = [f"{question.part} : {question.title}" for question in self.evaluation.questions]
         question_titles = []
-        max_points = [
-            question.points * question.coefficient for question in self.evaluation.questions]
+        # Use only active questions
+        active_indices = self.active_question_indices()
+        max_points = [self.evaluation.questions[i].points * self.evaluation.questions[i].coefficient for i in active_indices]
         min_values = []
         q1_values = []
         median_values = []
@@ -405,10 +454,10 @@ class Results:
         last_part = None
         part_id = 0
 
-        for i, question in enumerate(self.evaluation.questions):
+        for i in active_indices:
+            question = self.evaluation.questions[i]
             question_uid = self.evaluation.get_question_uid(i)
-            question_scores = [self.scores[student_email][question_uid]
-                               * question.coefficient for student_email in self.scores]
+            question_scores = [self.scores[student_email].get(question_uid, 0.0) * question.coefficient for student_email in self.scores]
 
             if question.part != last_part:
                 last_part = question.part
@@ -418,8 +467,7 @@ class Results:
                 question_titles.append(f"{question.title}")
 
             if question_scores:
-                quartiles = np.percentile(
-                    question_scores, [0, 25, 50, 75, 100])
+                quartiles = np.percentile(question_scores, [0, 25, 50, 75, 100])
                 min_values.append(quartiles[0])
                 q1_values.append(quartiles[1])
                 median_values.append(quartiles[2])
@@ -434,7 +482,9 @@ class Results:
     def plot_statistics_per_part(self, ax):
         # Group questions by part
         parts = {}
-        for i, question in enumerate(self.evaluation.questions):
+        active_indices = self.active_question_indices()
+        for i in active_indices:
+            question = self.evaluation.questions[i]
             question_uid = self.evaluation.get_question_uid(i)
             if question.part not in parts:
                 parts[question.part] = []
@@ -457,8 +507,7 @@ class Results:
 
             for question, question_uid in questions:
                 for i, student_email in enumerate(self.scores):
-                    part_scores[i] += self.scores[student_email][question_uid] * \
-                        question.coefficient
+                    part_scores[i] += self.scores[student_email].get(question_uid, 0.0) * question.coefficient
 
             if part_scores:
                 quartiles = np.percentile(part_scores, [0, 25, 50, 75, 100])
@@ -475,49 +524,26 @@ class Results:
                              q1_values, median_values, q3_values, max_values, average_values)
         ax.set_title('Statistics per Part')
 
-    def plot_average_and_max(self, ax, labels, average_grades, max_grades):
-        self.plot_style(ax)
-
-        # Plotting
-        x_positions = np.arange(len(labels))
-        width = 0.8
-        # Plot bars for max grades
-        ax.bar(x_positions, max_grades, width,
-               label='Max Grade', color=TERNARY_COLOR, zorder=0)
-
-        # Plot bars for averages grades
-        ax.bar(x_positions, average_grades, width, label='Median Grade',
-               color=SEC_HIGHLIGHT_COLOR, zorder=1)
-
-        ax.set_xticks(x_positions)
-        ax.set_xticklabels(labels, rotation=45, ha='right')
-        ax.set_title('Average and Max Grades per Question')
-        ax.set_ylabel('Grades')
-        ax.set_xlabel('Questions')
-        ax.legend()
-        ax.grid(axis='y', linestyle='--', alpha=0.7)
-
     def plot_average_and_max_per_question(self, ax):
-        question_uids = [self.evaluation.get_question_uid(
-            i) for i in range(len(self.evaluation.questions))]
-        max_grades = [
-            question.points for question in self.evaluation.questions]
+        active_indices = self.active_question_indices()
+        question_uids = [self.evaluation.get_question_uid(i) for i in active_indices]
+        max_grades = [self.evaluation.questions[i].points for i in active_indices]
 
         # Calculate average grades for each question
         average_grades = []
-        for i, question_uid in enumerate(question_uids):
-            total_score = sum(
-                self.scores[student_email][question_uid] for student_email in self.scores)
-            average_grades.append(
-                total_score / len(self.scores) if self.scores else 0)
+        for i, uid in zip(active_indices, question_uids):
+            total_score = sum(self.scores[student_email].get(uid, 0.0) for student_email in self.scores)
+            average_grades.append(total_score / len(self.scores) if self.scores else 0)
 
         self.plot_average_and_max(
-            ax, [question.title for question in self.evaluation.questions], average_grades, max_grades)
+            ax, [self.evaluation.questions[i].title for i in active_indices], average_grades, max_grades)
 
     def plot_average_and_max_grades_per_part(self, ax):
         # Group questions by part
         parts = {}
-        for i, question in enumerate(self.evaluation.questions):
+        active_indices = self.active_question_indices()
+        for i in active_indices:
+            question = self.evaluation.questions[i]
             question_uid = self.evaluation.get_question_uid(i)
             if question.part not in parts:
                 parts[question.part] = []
@@ -532,7 +558,7 @@ class Results:
             part_max_grade = sum(question.points for question, _ in questions)
             part_total_score = 0.0
             for question, question_uid in questions:
-                part_total_score += sum(self.scores[student_email][question_uid]
+                part_total_score += sum(self.scores[student_email].get(question_uid, 0.0)
                                         for student_email in self.scores)
             part_average_grade = part_total_score / \
                 len(self.scores) if self.scores else 0.0
@@ -859,8 +885,7 @@ def main():
 
                     # Reload results and update plots
                     results = Results.read_results_from_csv(
-                        results_file, class_, evaluation)
-                    results.settings = settings
+                        results_file, class_, evaluation, settings)
                     results.plot_all_statistics(plots_file)
                     anonym_plots_file = os.path.splitext(
                         plots_file)[0] + '_anonym' + os.path.splitext(plots_file)[1]
