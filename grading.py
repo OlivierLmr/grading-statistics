@@ -320,7 +320,7 @@ class Results:
             for i in active_indices:
                 question_uid = self.evaluation.get_question_uid(i)
                 question_scores = [self.scores[student_email].get(question_uid, 0.0) for student_email in self.scores]
-                average_row[question_uid] = f"{np.mean(question_scores):.2f}" if question_scores else 0.0
+                average_row[question_uid] = f"{np.mean(question_scores):.2f}" if question_scores else "0.00"
             average_row['Total Grade'] = f"{self.get_total_average():.2f}"
             writer.writerow(average_row)
 
@@ -329,8 +329,8 @@ class Results:
             for i in active_indices:
                 question_uid = self.evaluation.get_question_uid(i)
                 question_scores = [self.scores[student_email].get(question_uid, 0.0) for student_email in self.scores]
-                median_row[question_uid] = np.median(question_scores) if question_scores else 0.0
-            median_row['Total Grade'] = self.get_total_median()
+                median_row[question_uid] = f"{np.median(question_scores):.2f}" if question_scores else "0.00"
+            median_row['Total Grade'] = f"{self.get_total_median():.2f}"
             writer.writerow(median_row)
 
     @classmethod
@@ -459,12 +459,14 @@ class Results:
             question_uid = self.evaluation.get_question_uid(i)
             question_scores = [self.scores[student_email].get(question_uid, 0.0) * question.coefficient for student_email in self.scores]
 
+            # Prefix the question number before the question title in plots
+            qlabel = f"Q{i+1} {question.title}"
             if question.part != last_part:
                 last_part = question.part
                 part_id += 1
-                question_titles.append(f"{question.part} : {question.title}")
+                question_titles.append(f"{question.part} : {qlabel}")
             else:
-                question_titles.append(f"{question.title}")
+                question_titles.append(qlabel)
 
             if question_scores:
                 quartiles = np.percentile(question_scores, [0, 25, 50, 75, 100])
@@ -524,19 +526,37 @@ class Results:
                              q1_values, median_values, q3_values, max_values, average_values)
         ax.set_title('Statistics per Part')
 
+    def plot_average_and_max(self, ax, labels, average_grades, max_grades):
+        """Plot average and max bars for given labels."""
+        self.plot_style(ax)
+
+        x_positions = np.arange(len(labels))
+        width = 0.8
+        ax.bar(x_positions, max_grades, width,
+               label='Max Grade', color=TERNARY_COLOR, zorder=0)
+        ax.bar(x_positions, average_grades, width,
+               label='Average', color=SEC_HIGHLIGHT_COLOR, zorder=1)
+
+        ax.set_xticks(x_positions)
+        ax.set_xticklabels(labels, rotation=45, ha='right')
+        ax.set_ylabel('Grades')
+        ax.legend()
+        ax.grid(axis='y', linestyle='--', alpha=0.7)
+
     def plot_average_and_max_per_question(self, ax):
         active_indices = self.active_question_indices()
         question_uids = [self.evaluation.get_question_uid(i) for i in active_indices]
         max_grades = [self.evaluation.questions[i].points for i in active_indices]
 
-        # Calculate average grades for each question
+        # Calculate average grades for each (active) question
         average_grades = []
         for i, uid in zip(active_indices, question_uids):
             total_score = sum(self.scores[student_email].get(uid, 0.0) for student_email in self.scores)
             average_grades.append(total_score / len(self.scores) if self.scores else 0)
 
-        self.plot_average_and_max(
-            ax, [self.evaluation.questions[i].title for i in active_indices], average_grades, max_grades)
+        # Labels include the question number before the title
+        labels = [f"Q{i+1} {self.evaluation.questions[i].title}" for i in active_indices]
+        self.plot_average_and_max(ax, labels, average_grades, max_grades)
 
     def plot_average_and_max_grades_per_part(self, ax):
         # Group questions by part
@@ -790,117 +810,173 @@ class Results:
 
 
 def main():
-    if len(sys.argv) != 3:
-        print("Usage: python planning.py <folder_path> <command>")
+    if len(sys.argv) != 2:
+        print("Usage: python grading.py <folder_path>")
         sys.exit(1)
 
     folder_path = sys.argv[1]
-    command = sys.argv[2]
-
     roster_file = os.path.join(folder_path, "roster.csv")
     questions_file = os.path.join(folder_path, "questions.csv")
     plots_file = os.path.join(folder_path, "plots.pdf")
     settings_file = os.path.join(folder_path, "settings.json")
     results_file = os.path.join(folder_path, "results.csv")
 
-    if command not in ['init', 'watch']:
-        print("Command must be either 'init' or 'watch'")
-        sys.exit(1)
-
     class_name = "Class"
     evaluation_name = "Evaluation"
 
-    if command == 'init':
-        settings = GlobalSettings()
+    # Detect missing / inconsistent files
+    missing = []
+    if not os.path.exists(folder_path):
+        missing.append('folder')
+    if not os.path.exists(roster_file):
+        missing.append('roster.csv')
+    if not os.path.exists(questions_file):
+        missing.append('questions.csv')
+    if not os.path.exists(settings_file):
+        missing.append('settings.json')
+    if not os.path.exists(results_file):
+        missing.append('results.csv')
 
-        # Create the folder if it does not exist
-        if not os.path.exists(folder_path):
-            os.makedirs(folder_path)
-            print(f"Created folder: {folder_path}")
+    def ask_yes_no(prompt_text: str) -> bool:
+        try:
+            resp = input(prompt_text + ' [y/N]: ').strip().lower()
+        except EOFError:
+            return False
+        return resp in ('y', 'yes')
 
-        # Create dummy evaluation and class CSVs if they don't exist
-        if not os.path.exists(roster_file):
-            Class.create_sample_class(roster_file)
-        if not os.path.exists(questions_file):
-            Evaluation.create_sample_evaluation(questions_file)
-        if not os.path.exists(settings_file):
-            settings.to_json(settings_file)
+    # If something's missing, propose to initialize (ask for consent)
+    if missing:
+        print("Detected missing or incomplete data:", ", ".join(missing))
+        if ask_yes_no("Initialize the folder and create sample files?"):
+            # Create folder if needed
+            if not os.path.exists(folder_path):
+                os.makedirs(folder_path)
+                print(f"Created folder: {folder_path}")
 
-        # Initialize class and evaluation
-        class_ = Class.from_csv(class_name, roster_file)
-        evaluation = Evaluation.from_csv(evaluation_name, questions_file)
-        results = Results(class_, evaluation, settings)
+            # Create dummy evaluation and class CSVs if they don't exist
+            if not os.path.exists(roster_file):
+                Class.create_sample_class(roster_file)
+            if not os.path.exists(questions_file):
+                Evaluation.create_sample_evaluation(questions_file)
 
-        # Save initial results to a CSV file
-        results.write_results_to_csv(results_file)
-        print(f"Initialized results and saved to {results_file}")
+            # Create default settings.json if missing
+            if not os.path.exists(settings_file):
+                GlobalSettings().to_json(settings_file)
 
-    elif command == 'watch':
-        # Watch for changes in the results file
-        if not os.path.exists(results_file):
-            print(
-                f"Results file '{results_file}' does not exist. Run 'init' first.")
-            sys.exit(1)
+            # Initialize class and evaluation and write initial results
+            class_ = Class.from_csv(class_name, roster_file)
+            evaluation = Evaluation.from_csv(evaluation_name, questions_file)
+            settings = GlobalSettings.from_json(settings_file)
+            results = Results(class_, evaluation, settings)
+            results.write_results_to_csv(results_file)
+            print(f"Initialized results and saved to {results_file}")
+        else:
+            print("Initialization declined. Exiting.")
+            sys.exit(0)
 
-        class_ = Class.from_csv(class_name, roster_file)
-        evaluation = Evaluation.from_csv(evaluation_name, questions_file)
+    # At this point, expect files to exist; begin watching
+    if not os.path.exists(results_file):
+        print(f"Results file '{results_file}' does not exist. Run the program again to initialize.")
+        sys.exit(1)
 
-        print(
-            f"Watching for changes in {results_file}, {roster_file}, and {questions_file}...")
-        last_modified_times = {
-            'results': os.path.getmtime(results_file),
-            'roster': os.path.getmtime(roster_file),
-            'questions': os.path.getmtime(questions_file),
-            'settings': os.path.getmtime(settings_file)
-        }
+    # Helper: check whether results.csv matches roster and questions (considering dropped questions)
+    def results_match_roster_and_questions(class_, evaluation, settings, results_path):
+        # Expected question uids based on active questions
+        active_indices = [i for i in range(len(evaluation.questions)) if (i + 1) not in getattr(settings, 'dropped_questions', [])]
+        expected_uids = [evaluation.get_question_uid(i) for i in active_indices]
 
         try:
-            first_run = True
-            while True:
+            with open(results_path, mode='r', newline='', encoding='utf-8') as csvfile:
+                reader = csv.reader(csvfile)
+                # Ensure there are at least three rows (part, title, header)
+                part = next(reader, None)
+                title = next(reader, None)
+                header = next(reader, None)
+                if header is None:
+                    return False, 'results file header is missing or too short'
+                # header expected: ['email', 'Q1', 'Q2', ...] but may include only active questions
+                header_uids = header[1:]
 
-                current_modified_times = {
-                    'results': os.path.getmtime(results_file),
-                    'roster': os.path.getmtime(roster_file),
-                    'questions': os.path.getmtime(questions_file),
-                    'settings': os.path.getmtime(settings_file)
-                }
+                if header_uids != expected_uids:
+                    return False, f"question columns mismatch. expected: {expected_uids}, found: {header_uids}"
 
-                settings = GlobalSettings.from_json(settings_file)
+                # collect emails from results body
+                result_emails = []
+                for row in reader:
+                    if len(row) > 0:
+                        result_emails.append(row[0])
 
-                for file_type, last_modified_time in last_modified_times.items():
-                    if current_modified_times[file_type] == last_modified_time and not first_run:
-                        continue
+                roster_emails = [s.email for s in class_.students]
+                if set(result_emails) != set(roster_emails):
+                    return False, f"student emails mismatch. roster: {roster_emails}, results: {result_emails}"
 
-                    first_run = False
+                return True, ''
+        except Exception as e:
+            return False, f'error reading results file: {e}'
 
-                    print(
-                        f"{file_type.capitalize()} file has been updated (was {last_modified_time}, now {current_modified_times[file_type]})")
+    # Load class/evaluation/settings to perform matching
+    class_ = Class.from_csv(class_name, roster_file)
+    evaluation = Evaluation.from_csv(evaluation_name, questions_file)
+    settings = GlobalSettings.from_json(settings_file)
 
-                    # Reload class or evaluation if necessary
-                    if file_type == 'roster':
-                        class_ = Class.from_csv(class_name, roster_file)
-                    elif file_type == 'questions':
-                        evaluation = Evaluation.from_csv(
-                            evaluation_name, questions_file)
+    ok, reason = results_match_roster_and_questions(class_, evaluation, settings, results_file)
+    if not ok:
+        print(f"Mismatch detected between results.csv and roster/questions: {reason}")
+        if ask_yes_no("Re-initialize results.csv to match the current roster/questions? This will overwrite results.csv."):
+            results = Results(class_, evaluation, settings)
+            results.write_results_to_csv(results_file)
+            print(f"Re-initialized results and saved to {results_file}")
+        else:
+            print("Keeping existing results.csv. Proceeding to watch (may produce errors).")
 
-                    # Reload results and update plots
-                    results = Results.read_results_from_csv(
-                        results_file, class_, evaluation, settings)
-                    results.plot_all_statistics(plots_file)
-                    anonym_plots_file = os.path.splitext(
-                        plots_file)[0] + '_anonym' + os.path.splitext(plots_file)[1]
-                    results.plot_all_statistics(
-                        anonym_plots_file, show_individual=False)
-                    results.write_results_with_stats(os.path.splitext(
-                        results_file)[0] + '_with_stats' + os.path.splitext(results_file)[1])
-                    print(f"Plots updated and saved to {plots_file}")
+    print(f"Watching for changes in {results_file}, {roster_file}, {questions_file} and {settings_file}...")
+    last_modified_times = {
+        'results': os.path.getmtime(results_file),
+        'roster': os.path.getmtime(roster_file),
+        'questions': os.path.getmtime(questions_file),
+        'settings': os.path.getmtime(settings_file)
+    }
 
-                    # Update the last modified time
-                    last_modified_times[file_type] = current_modified_times[file_type]
+    try:
+        first_run = True
+        while True:
+            current_modified_times = {
+                'results': os.path.getmtime(results_file),
+                'roster': os.path.getmtime(roster_file),
+                'questions': os.path.getmtime(questions_file),
+                'settings': os.path.getmtime(settings_file)
+            }
 
-                time.sleep(0.5)
-        except KeyboardInterrupt:
-            print("\nStopped watching.")
+            settings = GlobalSettings.from_json(settings_file)
+
+            for file_type, last_modified_time in last_modified_times.items():
+                if current_modified_times[file_type] == last_modified_time and not first_run:
+                    continue
+
+                first_run = False
+
+                print(f"{file_type.capitalize()} file has been updated (was {last_modified_time}, now {current_modified_times[file_type]})")
+
+                # Reload class or evaluation if necessary
+                if file_type == 'roster':
+                    class_ = Class.from_csv(class_name, roster_file)
+                elif file_type == 'questions':
+                    evaluation = Evaluation.from_csv(evaluation_name, questions_file)
+
+                # Reload results and update plots
+                results = Results.read_results_from_csv(results_file, class_, evaluation, settings)
+                results.plot_all_statistics(plots_file)
+                anonym_plots_file = os.path.splitext(plots_file)[0] + '_anonym' + os.path.splitext(plots_file)[1]
+                results.plot_all_statistics(anonym_plots_file, show_individual=False)
+                results.write_results_with_stats(os.path.splitext(results_file)[0] + '_with_stats' + os.path.splitext(results_file)[1])
+                print(f"Plots updated and saved to {plots_file}")
+
+                # Update the last modified time
+                last_modified_times[file_type] = current_modified_times[file_type]
+
+            time.sleep(0.5)
+    except KeyboardInterrupt:
+        print("\nStopped watching.")
 
 
 if __name__ == "__main__":

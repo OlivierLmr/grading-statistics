@@ -14,62 +14,59 @@ pip3 install -r requirements.txt
 
 ## Usage
 
-### Generate files
-
-First run the init command to generate all necessary files :
+Run the program with a single argument: the folder that will contain (or already contains) the grading files.
 
 ```bash
-python3 grading.py folder_name init
+python3 grading.py folder_name
 ```
 
-This will create a folder named `folder_name` in the current directory. Inside this folder, it will create the following files:
+Behavior:
+- If the folder or any required files (roster.csv, questions.csv, settings.json, results.csv) are missing or incomplete, the program will report what is missing and ask for your consent to initialize the folder. If you consent it will:
+  - create the folder if needed,
+  - write sample `roster.csv` and `questions.csv` if they are missing,
+  - write a `settings.json` file containing all supported settings with their default values if missing,
+  - write an initial `results.csv` (with 0.0 scores) and exit the initialization step.
+- If you decline initialization the program exits.
+- When the required files are present the program runs a watcher loop: it monitors `results.csv`, `roster.csv`, `questions.csv` and `settings.json`. On any change it regenerates:
+  - `plots.pdf` (detailed plots),
+  - `plots_anonym.pdf` (anonymized plots without individual names),
+  - `results_with_stats.csv` (results plus total grade and per-question statistics).
 
-- `roster.csv`: A CSV file containing the list of students, initially a single dummy student.
-- `questions.csv`: A CSV file containing the list of questions, initially a single dummy question.
-- `results.csv`: A CSV file containing the results of the grading, initially with 0.0 for the only cell.
-- `settings.json`: A JSON file containing the settings for the grading process, e.g. bonus points.
+Notes on CSV layout and plotting:
+- The program treats question numbers as 1-based (Q1, Q2, ...), in the order they appear in `questions.csv`.
+- Question numbers are now prefixed to question titles in plots and labels (e.g. "Q1 Question title").
+- If a question is listed in `dropped_questions` in settings.json it is treated as if it never existed: it is excluded from calculations, CSV outputs and plots.
+- If a question is listed in `given_questions` every student is awarded the full points for that question (unless it is also dropped).
 
-### Settings (all supported fields)
+### Files created by initialization
+- `roster.csv` — list of students (columns: last name, first name, email).
+- `questions.csv` — list of questions (columns: part, name, points, coefficient).
+- `results.csv` — per-student per-question scores (first two rows contain part and title rows, followed by a header row and student rows).
+- `settings.json` — contains all supported settings (see below) with default values.
 
-The project supports the following fields in `settings.json`. All are optional; sensible defaults are used when a field is missing.
-
-- `bonus_points` (number, default 0.0)
-  - Reduces the effective maximum score used when converting total points to the grade scale. Internally the grade formula divides by (max_score - bonus_points). Use with care: a positive value decreases the denominator and therefore raises grades.
-
-- `added_points` (number, default 0.0)
-  - Added to each student's total points before converting to the grade scale. Use this to give everyone the same extra points.
-
-- `dropped_questions` (array of integers, default [])
-  - A list of 1-based question numbers to ignore entirely. Dropped questions are excluded from all calculations, CSV outputs and plots (they are treated as if they never existed in the evaluation).
-
-- `given_questions` (array of integers, default [])
-  - A list of 1-based question numbers to grant full points to every student. Values in `results.csv` for these questions are ignored and every student will receive the question's maximum points.
-
-Behavior notes:
-- Indexing is 1-based and matches the order in `questions.csv` (Q1, Q2, ...).
-- If a question is listed in both `dropped_questions` and `given_questions`, it will be dropped (ignored).
-- When `settings.json` changes while the `watch` command is running, the watcher will reload settings and regenerate plots and the _with_stats CSV.
-- The `init` command writes a `settings.json` with default values if none exists; you can edit it afterwards.
-
-Example `settings.json` (full):
+### Default settings.json (written by init)
+When the program creates a default `settings.json` it will include all supported fields with sensible defaults. Example default content:
 
 ```json
 {
-    "bonus_points": 1.0,
-    "added_points": 0.5,
-    "dropped_questions": [3],
-    "given_questions": [1, 2]
+    "bonus_points": 0.0,
+    "added_points": 0.0,
+    "dropped_questions": [],
+    "given_questions": []
 }
 ```
 
-### Add students and questions
+(You can edit `settings.json` at any time; changes will be picked up by the watcher.)
 
-At any time, if the number of students or questions change, you may re-run the `init` command to re-generate the `results.csv` file. Note that this will overwrite the previous `results.csv` file, so make sure to back it up if needed.
+### Add students, questions or edit results
+- To add students or questions, edit `roster.csv` and `questions.csv` respectively.
+- If you change the number of questions you may need to re-run the program and allow initialization to re-create a matching `results.csv` (or update `results.csv` manually to match the new questions layout).
 
-### Add results
-
-Once the roster and question set is correct, you may run the `watch` command. This will automatically re-generate a `plots.pdf` file in the provided folder every time any of the csv files changes.
+### Add results and run the watcher
+- After files are present, run:
 
 ```bash
-python3 grading.py folder_name watch
+python3 grading.py folder_name
 ```
+
+The program will watch for changes and automatically regenerate `plots.pdf`, `plots_anonym.pdf` and `results_with_stats.csv` whenever `results.csv`, `roster.csv`, `questions.csv` or `settings.json` are modified.
