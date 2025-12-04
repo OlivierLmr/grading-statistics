@@ -803,12 +803,117 @@ class Results:
         plt.close(fig)
 
 
+def import_online_csv_to_results(online_csv_path: str, results_file: str, class_: Class, evaluation: Evaluation, settings: GlobalSettings = GlobalSettings.default):
+    """Import an online grading-export CSV and populate results.csv accordingly.
+
+    The online CSV is expected to have headers like:
+    Name,Email,Success Rate,Total Points,Obtained Points,Q1,Q2,...
+
+    This function reads per-question scores and writes them into results_file using
+    the active questions defined by evaluation and settings.
+    """
+    # Initialize empty results respecting dropped/given questions
+    results = Results(class_, evaluation, settings)
+
+    # Normalize header names (case-insensitive) and detect question columns
+    with open(online_csv_path, mode='r', newline='', encoding='utf-8') as csvfile:
+        reader = csv.DictReader(csvfile)
+        # Determine the email header key (case-insensitive)
+        fieldnames = reader.fieldnames or []
+        email_key = None
+        question_keys = []  # list of tuples (qnum_zero_based, keyname)
+        for key in fieldnames:
+            if key is None:
+                continue
+            lk = key.strip().lower()
+            if lk == 'email':
+                email_key = key
+            # match Q<number> (e.g. Q1, Q2)
+            if lk.startswith('q') and lk[1:].isdigit():
+                try:
+                    qnum = int(lk[1:])
+                    question_keys.append((qnum - 1, key))
+                except ValueError:
+                    pass
+
+        if email_key is None:
+            raise ValueError('Could not find an Email column in the online CSV')
+
+        for row in reader:
+            raw_email = row.get(email_key, '') or ''
+            student_email_raw = raw_email.strip().strip('"\'')
+            if not student_email_raw:
+                print("Skipping row with empty email")
+                continue
+
+            # Use only the local-part (before '@') to match roster entries
+            local_part = student_email_raw.split('@')[0]
+
+            # Find matching key in results.scores. roster may contain only local-part entries.
+            matched_email = None
+            if local_part in results.scores:
+                matched_email = local_part
+            elif student_email_raw in results.scores:
+                matched_email = student_email_raw
+            else:
+                # try stripping extra quotes and whitespace
+                s2 = student_email_raw.strip('"\'')
+                lp2 = s2.split('@')[0]
+                if lp2 in results.scores:
+                    matched_email = lp2
+                elif s2 in results.scores:
+                    matched_email = s2
+
+            if not matched_email:
+                # skip unknown students
+                print("Skipping unknown student email (no roster match for):", student_email_raw)
+                continue
+            for qidx, key in question_keys:
+                # Skip out-of-range question numbers
+                if qidx < 0 or qidx >= len(evaluation.questions):
+                    continue
+                uid = evaluation.get_question_uid(qidx)
+                if uid not in results.scores[matched_email]:
+                    # dropped question or not active
+                    continue
+                raw = (row.get(key, '') or '').strip()
+                if raw == '':
+                    score = 0.0
+                else:
+                    # Try to parse numeric value; some exports may include non-numeric chars
+                    try:
+                        score = float(raw)
+                    except ValueError:
+                        # Remove any non-digit characters (like % or quotes) and try again
+                        cleaned = ''.join(ch for ch in raw if (ch.isdigit() or ch in '.-'))
+                        score = float(cleaned) if cleaned != '' else 0.0
+                # Set the raw points (Results expects raw points, coefficients are applied later)
+                results.set_score(matched_email, uid, score)
+
+    # Ensure 'given' questions are applied after import as well
+    for qnum in getattr(results.settings, 'given_questions', []):
+        idx = qnum - 1
+        if 0 <= idx < len(evaluation.questions):
+            uid = evaluation.get_question_uid(idx)
+            if uid in next(iter(results.scores.values()), {}):
+                full_score = evaluation.questions[idx].points
+                for student_email in results.scores:
+                    results.scores[student_email][uid] = full_score
+
+    # Write updated results back to results_file
+    results.write_results_to_csv(results_file)
+    print(f"Imported online results from {online_csv_path} and wrote to {results_file}")
+
+
 def main():
-    if len(sys.argv) != 2:
-        print("Usage: python grading.py <folder_path>")
+    usage = "Usage: python grading.py <folder_path> [<online_export.csv>]"
+    if len(sys.argv) < 2:
+        print(usage)
         sys.exit(1)
 
     folder_path = sys.argv[1]
+    online_csv = sys.argv[2] if len(sys.argv) >= 3 else None
+
     roster_file = os.path.join(folder_path, "roster.csv")
     questions_file = os.path.join(folder_path, "questions.csv")
     plots_file = os.path.join(folder_path, "plots.pdf")
@@ -817,6 +922,13 @@ def main():
 
     class_name = "Class"
     evaluation_name = "Evaluation"
+
+    def ask_yes_no(prompt_text: str) -> bool:
+        try:
+            resp = input(prompt_text + ' [y/N]: ').strip().lower()
+        except EOFError:
+            return False
+        return resp in ('y', 'yes')
 
     # Detect missing / inconsistent files
     missing = []
@@ -830,13 +942,6 @@ def main():
         missing.append('settings.json')
     if not os.path.exists(results_file):
         missing.append('results.csv')
-
-    def ask_yes_no(prompt_text: str) -> bool:
-        try:
-            resp = input(prompt_text + ' [y/N]: ').strip().lower()
-        except EOFError:
-            return False
-        return resp in ('y', 'yes')
 
     # If something's missing, propose to initialize (ask for consent)
     if missing:
@@ -868,12 +973,34 @@ def main():
             print("Initialization declined. Exiting.")
             sys.exit(0)
 
-    # At this point, expect files to exist; begin watching
+    # If an online CSV was provided, ask confirmation and import it (this will overwrite results.csv)
+    if online_csv:
+        online_csv_path = os.path.abspath(online_csv)
+        if not os.path.isfile(online_csv_path):
+            print(f"Online export file not found: {online_csv_path}")
+            sys.exit(1)
+
+        prompt = f"Import online export '{online_csv_path}' into '{results_file}'? This will overwrite results.csv. Proceed?"
+        if ask_yes_no(prompt):
+            # Ensure roster/questions exist before importing
+            if not os.path.exists(roster_file) or not os.path.exists(questions_file):
+                print("roster.csv or questions.csv missing in the provided folder. Cannot import. Aborting.")
+                sys.exit(1)
+
+            class_ = Class.from_csv(class_name, roster_file)
+            evaluation = Evaluation.from_csv(evaluation_name, questions_file)
+            settings = GlobalSettings.from_json(settings_file) if os.path.exists(settings_file) else GlobalSettings.default
+
+            import_online_csv_to_results(online_csv_path, results_file, class_, evaluation, settings)
+        else:
+            print("Import skipped by user.")
+
+
+    # Begin watching (original behavior)
     if not os.path.exists(results_file):
         print(f"Results file '{results_file}' does not exist. Run the program again to initialize.")
         sys.exit(1)
 
-    # Helper: check whether results.csv matches roster and questions (considering dropped questions)
     def results_match_roster_and_questions(class_, evaluation, settings, results_path):
         # Expected question uids based on active questions
         active_indices = [i for i in range(len(evaluation.questions)) if (i + 1) not in getattr(settings, 'dropped_questions', [])]
