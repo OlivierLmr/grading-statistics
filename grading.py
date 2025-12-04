@@ -460,13 +460,7 @@ class Results:
             question_scores = [self.scores[student_email].get(question_uid, 0.0) * question.coefficient for student_email in self.scores]
 
             # Prefix the question number before the question title in plots
-            qlabel = f"Q{i+1} {question.title}"
-            if question.part != last_part:
-                last_part = question.part
-                part_id += 1
-                question_titles.append(f"{question.part} : {qlabel}")
-            else:
-                question_titles.append(qlabel)
+            question_titles.append(f"Q{i+1} - {question.part} : {question.title}")
 
             if question_scores:
                 quartiles = np.percentile(question_scores, [0, 25, 50, 75, 100])
