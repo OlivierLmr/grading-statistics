@@ -97,6 +97,7 @@ class ConsoleInteraction(UserInteraction):
             if points_input:
                 return float(points_input)
         except (EOFError, ValueError):
+            # On input error or invalid numeric value, fall back to the default
             pass
         return 1.0
 

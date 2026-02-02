@@ -3,9 +3,11 @@ CSV I/O module for grading system.
 
 This module separates CSV parsing logic from file I/O operations,
 making the parsing logic testable without requiring actual files.
+
+Note: For file-based I/O, use read_questions_from_csv() and read_students_from_csv()
+from grading.py. This module focuses on the parsing logic that can be tested with StringIO.
 """
 import csv
-from typing import List
 from grading import Question, Student
 
 
@@ -50,37 +52,3 @@ def parse_students_csv(csv_reader):
         email = row['email']
         students.append(Student(last_name, first_name, email))
     return students
-
-
-def read_questions_from_csv(file_path: str):
-    """
-    Read questions from a CSV file.
-
-    This is a thin wrapper around parse_questions_csv that handles file I/O.
-
-    Args:
-        file_path: Path to the CSV file
-
-    Returns:
-        List[Question]: List of parsed questions
-    """
-    with open(file_path, mode='r', newline='', encoding='utf-8') as csvfile:
-        reader = csv.DictReader(csvfile)
-        return parse_questions_csv(reader)
-
-
-def read_students_from_csv(file_path: str):
-    """
-    Read students from a CSV file.
-
-    This is a thin wrapper around parse_students_csv that handles file I/O.
-
-    Args:
-        file_path: Path to the CSV file
-
-    Returns:
-        List[Student]: List of parsed students
-    """
-    with open(file_path, mode='r', newline='', encoding='utf-8') as csvfile:
-        reader = csv.DictReader(csvfile)
-        return parse_students_csv(reader)

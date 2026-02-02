@@ -12,14 +12,13 @@ from pathlib import Path
 # Add parent directory to path to import grading module
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from grading import Question, Student, Evaluation, Class, GlobalSettings, Results
+from grading import Results
 from tests.fixtures.sample_data import (
     create_sample_questions,
     create_sample_students,
     create_sample_evaluation,
     create_sample_class,
-    create_sample_settings,
-    create_sample_results
+    create_sample_settings
 )
 
 

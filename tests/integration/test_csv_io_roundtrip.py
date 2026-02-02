@@ -4,9 +4,7 @@ Integration tests for CSV I/O round-trip operations.
 Tests that data can be written to CSV and read back without loss.
 """
 import pytest
-from pathlib import Path
-from grading import Evaluation, Class, Student
-from grading_io import read_questions_from_csv, read_students_from_csv
+from grading import Evaluation, Class, Student, read_questions_from_csv, read_students_from_csv
 
 
 @pytest.mark.integration
