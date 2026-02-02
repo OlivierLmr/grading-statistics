@@ -54,6 +54,20 @@ class Evaluation:
         questions = read_questions_from_csv(file_path)
         return cls(name, questions)
 
+    def write_to_csv(self, file_path: str):
+        """Write the questions to a CSV file."""
+        with open(file_path, mode='w', newline='', encoding='utf-8') as csvfile:
+            fieldnames = ['part', 'name', 'points', 'coefficient']
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            writer.writeheader()
+            for question in self.questions:
+                writer.writerow({
+                    'part': question.part,
+                    'name': question.title,
+                    'points': question.points,
+                    'coefficient': question.coefficient
+                })
+
     @staticmethod
     def create_sample_evaluation(file_path: str):
         sample_evaluation = [Question("Part 1", "Sample Question", 10.0, 1.0)]
@@ -113,6 +127,19 @@ class Class:
         for student in students:
             new_class.add_student(student)
         return new_class
+
+    def write_to_csv(self, file_path: str):
+        """Write the roster (students) to a CSV file."""
+        with open(file_path, mode='w', newline='', encoding='utf-8') as csvfile:
+            fieldnames = ['last name', 'first name', 'email']
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+            writer.writeheader()
+            for student in self.students:
+                writer.writerow({
+                    'last name': student.last_name,
+                    'first name': student.first_name,
+                    'email': student.email
+                })
 
     @staticmethod
     def create_sample_class(file_path: str):
@@ -803,7 +830,7 @@ class Results:
         plt.close(fig)
 
 
-def import_online_csv_to_results(online_csv_path: str, results_file: str, class_: Class, evaluation: Evaluation, settings: GlobalSettings = GlobalSettings.default):
+def import_online_csv_to_results(online_csv_path: str, results_file: str, roster_file: str, questions_file: str, class_: Class, evaluation: Evaluation, settings: GlobalSettings = GlobalSettings.default):
     """Import an online grading-export CSV and populate results.csv accordingly.
 
     The online CSV is expected to have headers like:
@@ -811,9 +838,15 @@ def import_online_csv_to_results(online_csv_path: str, results_file: str, class_
 
     This function reads per-question scores and writes them into results_file using
     the active questions defined by evaluation and settings.
+
+    If unknown students are found, prompts the user to ignore, add to roster, or override roster.
+    If questions don't match or results.csv doesn't exist, prompts user to name the questions.
     """
     # Initialize empty results respecting dropped/given questions
     results = Results(class_, evaluation, settings)
+
+    # Track unknown students and their data
+    unknown_students = []  # list of tuples: (student_email_raw, local_part, row_data)
 
     # Normalize header names (case-insensitive) and detect question columns
     with open(online_csv_path, mode='r', newline='', encoding='utf-8') as csvfile:
@@ -838,6 +871,56 @@ def import_online_csv_to_results(online_csv_path: str, results_file: str, class_
 
         if email_key is None:
             raise ValueError('Could not find an Email column in the online CSV')
+
+        # Check if questions need to be updated
+        online_question_count = len(question_keys)
+        results_exists = os.path.exists(results_file)
+
+        # Determine if we need to prompt for question names
+        need_question_update = False
+        if not results_exists:
+            print(f"\nNo existing results.csv found.")
+            need_question_update = True
+        elif online_question_count != len(evaluation.questions):
+            print(f"\nQuestion count mismatch:")
+            print(f"  Online CSV has {online_question_count} questions")
+            print(f"  Current evaluation has {len(evaluation.questions)} questions")
+            need_question_update = True
+
+        if need_question_update:
+            print(f"\nPlease provide names for the {online_question_count} questions from the online CSV:")
+            new_questions = []
+            for qidx, _ in sorted(question_keys):
+                qnum = qidx + 1
+                try:
+                    question_name = input(f"  Question {qnum} name: ").strip()
+                    if not question_name:
+                        question_name = f"Question {qnum}"
+                except EOFError:
+                    question_name = f"Question {qnum}"
+
+                # Default values for part, points, and coefficient
+                part = "Part 1"
+                points = 1.0
+                coefficient = 1.0
+
+                # Try to prompt for points
+                try:
+                    points_input = input(f"  Question {qnum} points (default 1.0): ").strip()
+                    if points_input:
+                        points = float(points_input)
+                except (EOFError, ValueError):
+                    points = 1.0
+
+                new_questions.append(Question(part, question_name, points, coefficient))
+
+            # Update the evaluation
+            evaluation.questions = new_questions
+            evaluation.write_to_csv(questions_file)
+            print(f"\nUpdated questions saved to {questions_file}")
+
+            # Re-initialize results with updated evaluation
+            results = Results(class_, evaluation, settings)
 
         for row in reader:
             raw_email = row.get(email_key, '') or ''
@@ -865,9 +948,10 @@ def import_online_csv_to_results(online_csv_path: str, results_file: str, class_
                     matched_email = s2
 
             if not matched_email:
-                # skip unknown students
-                print("Skipping unknown student email (no roster match for):", student_email_raw)
+                # Collect unknown student data for later processing
+                unknown_students.append((student_email_raw, local_part, row))
                 continue
+
             for qidx, key in question_keys:
                 # Skip out-of-range question numbers
                 if qidx < 0 or qidx >= len(evaluation.questions):
@@ -889,6 +973,182 @@ def import_online_csv_to_results(online_csv_path: str, results_file: str, class_
                         score = float(cleaned) if cleaned != '' else 0.0
                 # Set the raw points (Results expects raw points, coefficients are applied later)
                 results.set_score(matched_email, uid, score)
+
+    # Handle unknown students if any were found
+    if unknown_students:
+        print(f"\nFound {len(unknown_students)} unknown student(s) not in roster:")
+        for email_raw, local, _ in unknown_students:
+            print(f"  - {email_raw}")
+
+        print("\nWhat would you like to do with these unknown students?")
+        print("  1. Ignore them (skip importing their scores)")
+        print("  2. Add them to the roster (and import their scores)")
+        print("  3. Override the roster with only these students")
+
+        try:
+            choice = input("Enter your choice (1/2/3): ").strip()
+        except EOFError:
+            choice = '1'
+
+        if choice == '2':
+            # Add unknown students to the roster
+            print("\nAdding unknown students to roster...")
+            for email_raw, local, row_data in unknown_students:
+                # Keep only the part before '@' for the email in roster
+                roster_email = local
+
+                # Try to extract first and last name from email format (first.last)
+                if '.' in local:
+                    parts = local.split('.')
+                    first_name = parts[0].capitalize()
+                    last_name = parts[1].capitalize() if len(parts) > 1 else ""
+                else:
+                    # Email doesn't follow first.last pattern, ask user
+                    print(f"\nWarning: '{email_raw}' doesn't follow 'first.last@email.com' pattern")
+                    try:
+                        name_input = input(f"  Please enter name in 'first last' format for {roster_email}: ").strip()
+                        name_parts = name_input.split(maxsplit=1)
+                        if len(name_parts) >= 2:
+                            first_name = name_parts[0].capitalize()
+                            last_name = name_parts[1].capitalize()
+                        elif len(name_parts) == 1:
+                            first_name = name_parts[0].capitalize()
+                            last_name = ""
+                        else:
+                            first_name = ""
+                            last_name = ""
+                    except EOFError:
+                        first_name = ""
+                        last_name = ""
+
+                new_student = Student(last_name, first_name, roster_email)
+                class_.add_student(new_student)
+                print(f"  Added: {first_name} {last_name} ({roster_email})")
+
+            # Save the updated roster
+            class_.write_to_csv(roster_file)
+            print(f"Updated roster saved to {roster_file}")
+
+            # Re-initialize results with the updated class to include new students
+            results = Results(class_, evaluation, settings)
+
+            # Re-process the entire CSV including the previously unknown students
+            with open(online_csv_path, mode='r', newline='', encoding='utf-8') as csvfile:
+                reader = csv.DictReader(csvfile)
+                for row in reader:
+                    raw_email = row.get(email_key, '') or ''
+                    student_email_raw = raw_email.strip().strip('"\'')
+                    if not student_email_raw:
+                        continue
+
+                    local_part = student_email_raw.split('@')[0]
+                    matched_email = None
+                    if local_part in results.scores:
+                        matched_email = local_part
+                    elif student_email_raw in results.scores:
+                        matched_email = student_email_raw
+
+                    if not matched_email:
+                        continue
+
+                    for qidx, key in question_keys:
+                        if qidx < 0 or qidx >= len(evaluation.questions):
+                            continue
+                        uid = evaluation.get_question_uid(qidx)
+                        if uid not in results.scores[matched_email]:
+                            continue
+                        raw = (row.get(key, '') or '').strip()
+                        if raw == '':
+                            score = 0.0
+                        else:
+                            try:
+                                score = float(raw)
+                            except ValueError:
+                                cleaned = ''.join(ch for ch in raw if (ch.isdigit() or ch in '.-'))
+                                score = float(cleaned) if cleaned != '' else 0.0
+                        results.set_score(matched_email, uid, score)
+
+        elif choice == '3':
+            # Override roster with only unknown students
+            print("\nOverriding roster with unknown students only...")
+            class_.students = []
+            for email_raw, local, row_data in unknown_students:
+                roster_email = local
+
+                # Try to extract first and last name from email format (first.last)
+                if '.' in local:
+                    parts = local.split('.')
+                    first_name = parts[0].capitalize()
+                    last_name = parts[1].capitalize() if len(parts) > 1 else ""
+                else:
+                    # Email doesn't follow first.last pattern, ask user
+                    print(f"\nWarning: '{email_raw}' doesn't follow 'first.last@email.com' pattern")
+                    try:
+                        name_input = input(f"  Please enter name in 'first last' format for {roster_email}: ").strip()
+                        name_parts = name_input.split(maxsplit=1)
+                        if len(name_parts) >= 2:
+                            first_name = name_parts[0].capitalize()
+                            last_name = name_parts[1].capitalize()
+                        elif len(name_parts) == 1:
+                            first_name = name_parts[0].capitalize()
+                            last_name = ""
+                        else:
+                            first_name = ""
+                            last_name = ""
+                    except EOFError:
+                        first_name = ""
+                        last_name = ""
+
+                new_student = Student(last_name, first_name, roster_email)
+                class_.add_student(new_student)
+                print(f"  Added: {first_name} {last_name} ({roster_email})")
+
+            # Save the new roster
+            class_.write_to_csv(roster_file)
+            print(f"Roster overwritten and saved to {roster_file}")
+
+            # Re-initialize results with the new class
+            results = Results(class_, evaluation, settings)
+
+            # Process only the unknown students
+            with open(online_csv_path, mode='r', newline='', encoding='utf-8') as csvfile:
+                reader = csv.DictReader(csvfile)
+                for row in reader:
+                    raw_email = row.get(email_key, '') or ''
+                    student_email_raw = raw_email.strip().strip('"\'')
+                    if not student_email_raw:
+                        continue
+
+                    local_part = student_email_raw.split('@')[0]
+                    matched_email = None
+                    if local_part in results.scores:
+                        matched_email = local_part
+                    elif student_email_raw in results.scores:
+                        matched_email = student_email_raw
+
+                    if not matched_email:
+                        continue
+
+                    for qidx, key in question_keys:
+                        if qidx < 0 or qidx >= len(evaluation.questions):
+                            continue
+                        uid = evaluation.get_question_uid(qidx)
+                        if uid not in results.scores[matched_email]:
+                            continue
+                        raw = (row.get(key, '') or '').strip()
+                        if raw == '':
+                            score = 0.0
+                        else:
+                            try:
+                                score = float(raw)
+                            except ValueError:
+                                cleaned = ''.join(ch for ch in raw if (ch.isdigit() or ch in '.-'))
+                                score = float(cleaned) if cleaned != '' else 0.0
+                        results.set_score(matched_email, uid, score)
+
+        else:
+            # Choice 1 or invalid choice: ignore unknown students
+            print("\nIgnoring unknown students. Their scores will not be imported.")
 
     # Ensure 'given' questions are applied after import as well
     for qnum in getattr(results.settings, 'given_questions', []):
@@ -991,7 +1251,7 @@ def main():
             evaluation = Evaluation.from_csv(evaluation_name, questions_file)
             settings = GlobalSettings.from_json(settings_file) if os.path.exists(settings_file) else GlobalSettings.default
 
-            import_online_csv_to_results(online_csv_path, results_file, class_, evaluation, settings)
+            import_online_csv_to_results(online_csv_path, results_file, roster_file, questions_file, class_, evaluation, settings)
         else:
             print("Import skipped by user.")
 
