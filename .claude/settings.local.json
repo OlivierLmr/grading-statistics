@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Skill(commit-changes)",
+      "Bash(.venv/bin/python -m pytest tests/ -v --tb=short)",
+      "Bash(.venv/bin/python -m pytest tests/ --tb=short -q)"
+    ]
+  }
+}
