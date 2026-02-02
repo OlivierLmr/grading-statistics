@@ -269,8 +269,9 @@ class Results:
         if student_email in self.scores and question_uid in self.scores[student_email]:
             self.scores[student_email][question_uid] = score
         else:
+            available_uids = list(self.scores[student_email].keys()) if student_email in self.scores else "N/A (student not found)"
             raise ValueError(
-                f"Invalid student email or question UID: {student_email}, {question_uid}\nAvailable question UIDs are: {list(self.scores[student_email].keys())}")
+                f"Invalid student email or question UID: {student_email}, {question_uid}\nAvailable question UIDs are: {available_uids}")
 
     def calculate_student_score(self, student_email: str, clamp: bool = True):
         if student_email in self.scores:
